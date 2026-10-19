@@ -48,8 +48,15 @@ The value `v` as a tracked pointer to an object: its box, or the object for cons
 function emit_box(fc::FnCtx, v::CGVal)
     v.kind === Boxed && return v.V
     (v.kind === Ghost || isconstant(v)) && return literal_pointer(fc, constant_value(v))
+    v.kind === UnionVal && return box_union(fc, v)
     v.kind === Inline || unsupported("boxing a value represented as ", v.kind)
     b = fc.builder
+    if v.vboxed !== nothing
+        # the box the value came from, if it has one (native `Vboxed`)
+        u = CGVal(v.typ, v.kind, v.V, v.constant, nothing)
+        return emit_if(() -> v.vboxed, fc, nonnull(fc, v.vboxed), T_tracked(); name="reuse_box",
+                       otherwise=() -> emit_box(fc, u))
+    end
     if v.typ === Bool
         c = LLVM.trunc!(b, v.V, LLVM.Int1Type())
         return LLVM.select!(b, c, literal_pointer(fc, true), literal_pointer(fc, false))
@@ -86,8 +93,8 @@ the value at run time.
 function convert_repr(fc::FnCtx, v::CGVal, @nospecialize T)
     k = repr_kind(T)
     (k === Bottom || v.kind === Bottom) && return bottom()
-    (k === UnionVal || v.kind === UnionVal) &&
-        unsupported("converting ", v.typ, " to ", T, " (unboxed unions)")
+    k === UnionVal && return to_union(fc, v, T)
+    v.kind === UnionVal && return from_union(fc, v, T)
     k === Ghost && return ghost(T, something(ghost_value(T)))
     if k === Inline
         if v.kind === Inline

@@ -26,3 +26,6 @@
   `typeassert`, `typeof`, `new` (inline values and objects), `getfield` and `setfield!`
   (with undefined-field checks and write barriers), `tuple`, `ifelse`, `isdefined`,
   `throw`, `sizeof`, constant `getglobal`, and constant folding.
+- Unboxed unions: construction, narrowing, conversions between unions and to and from
+  boxes (keeping the box a value came from), phis of unions, `isa`/`typeof`/`===` of
+  union values, isbits-union fields, and conditions that may not be `Bool`.
