@@ -2,3 +2,9 @@ name = "JuliaCodegen"
 uuid = "f68e5268-cafc-4116-b772-1c15436a0999"
 version = "0.1.0"
 authors = ["Valentin Churavy <v.churavy@gmail.com>"]
+
+[workspace]
+projects = ["test", "docs"]
+
+[compat]
+julia = "1.12"
