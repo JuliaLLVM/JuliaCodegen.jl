@@ -13,6 +13,7 @@ include("harness.jl")
 include("config.jl")
 include("facts.jl")
 include("ops.jl")
+include("repr.jl")
 
 @testset "Aqua" begin
     using Aqua

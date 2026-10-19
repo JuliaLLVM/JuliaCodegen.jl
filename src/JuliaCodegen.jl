@@ -18,5 +18,8 @@ include("config.jl")
 include("tbaa.jl")
 include("ops.jl")
 include("prologue.jl")
+include("repr.jl")
+include("layout.jl")
+include("values.jl")
 
 end
