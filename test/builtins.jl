@@ -50,6 +50,9 @@ const B_EGAL_PAIRS = Any[
     (missing, missing), (BNested(BPoint(0, 1), BRef(2, "x")), BNested(BPoint(0, 1), BRef(2, "x"))),
 ]
 
+b_throw(x) = throw(ArgumentError(x))
+b_throw_singleton() = throw(DivideError())
+
 mutable struct B_Atomic
     @atomic n::Int
     @atomic f::Float64
@@ -161,6 +164,20 @@ end
         @check "icmp ne ptr addrspace(10)"
         @check "@jl_egal__unboxed("
         print(test_ir(b_egal, (String, String)))
+    end
+end
+
+@testset "throw" begin
+    @cgtest b_throw("message")
+    @cgtest b_throw_singleton()
+    # through the runtime's `jl_throw`, as native code (which GPU compilers lower)
+    for (f, types) in ((b_throw, (String,)), (b_throw_singleton, ()))
+        @test @filecheck begin
+            @check_label "define internal void @julia_"
+            @check "call void @ijl_throw(ptr addrspace(12)"
+            @check_not "@ijl_apply_generic"
+            test_ir(f, types)
+        end
     end
 end
 

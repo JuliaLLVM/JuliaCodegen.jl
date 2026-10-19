@@ -67,8 +67,15 @@ function emit_call!(fc::FnCtx, f::CGVal, ex::Expr, @nospecialize(typ))
     end
     args = CGVal[operand(fc, a) for a in ex.args[2:end]]
     # a call that inference found to throw (e.g. of an intrinsic with the wrong number of
-    # arguments) goes to the runtime, which throws the error
-    typ === Union{} && return emit_dynamic_call(fc, f, args, typ)
+    # arguments) goes to the runtime, which throws the error; but `throw` itself, which
+    # throws through `jl_throw` as native code (which GPU compilers lower)
+    if typ === Union{}
+        if isconstant(f) && constant_value(f) === Core.throw
+            r = emit_builtin(fc, Core.throw, args, typ)
+            r === nothing || return r
+        end
+        return emit_dynamic_call(fc, f, args, typ)
+    end
     if isconstant(f) && constant_value(f) isa Core.IntrinsicFunction
         r = emit_intrinsic(fc, constant_value(f), args, typ)
         r === nothing || return r
