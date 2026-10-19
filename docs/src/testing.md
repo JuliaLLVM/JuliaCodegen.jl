@@ -17,6 +17,13 @@ once with native code and once with code compiled by JuliaCodegen, each on its o
 copy of the arguments, and checks that both return `isequal` values of the same type (or
 throw exceptions of the same type) and leave the arguments in the same state.
 `@cgtest run=r f(args...)` uses the runner `r(f, args...)` instead of JuliaCodegen.
+Mutable results whose `==` is identity (the arguments are copies) are compared field by
+field.
+
+`test/jit.jl` runs the code: it compiles the call with `JuliaCodegen.emit_entry!`, gives
+the globals of the objects the code refers to their addresses, checks the module with
+`verify_ir`, runs Julia's own LLVM pipeline and adds the module to Julia's JIT through
+LLVM.jl (`cgrun(f, args...)`; `test_ir(f, types)` is the IR before linking).
 
 With `JULIACODEGEN_GC_STRESS=1`, a full garbage collection runs before every execution,
 so that values the generated code does not root correctly are collected.

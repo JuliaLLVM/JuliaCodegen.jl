@@ -14,7 +14,7 @@ import Libdl
 The result of a differential check. `kind` is `:ok`, or what differs between the native
 execution (`expected`) and the compiled one (`got`):
 
-- `:value`: the results are not `isequal`;
+- `:value`: the results are not equal (see [`results_equal`](@ref));
 - `:type`: the results are `isequal`, but of different types;
 - `:exception`: one of the two threw, or both threw exceptions of different types;
 - `:arguments`: the results agree, but the arguments were mutated differently (`expected`
@@ -81,47 +81,64 @@ function differential(run, f, args...; gc::Bool=gc_stress())
         typeof(expected.exception) === typeof(got.exception) ||
             return Outcome(:exception, expected.exception, got.exception)
     else
-        isequal(expected, got) || return Outcome(:value, expected, got)
+        results_equal(expected, got) || return Outcome(:value, expected, got)
         typeof(expected) === typeof(got) || return Outcome(:type, expected, got)
     end
-    isequal(expected_args, got_args) || return Outcome(:arguments, expected_args, got_args)
+    results_equal(expected_args, got_args) || return Outcome(:arguments, expected_args, got_args)
     return OK
 end
 
 unwrap(x) = x isa Threw ? x.exception : x
 
+"""
+    results_equal(a, b)
+
+Whether two results agree: `isequal`, or for objects of mutable types whose `==` is
+identity (as for the deep copies of the arguments and the results computed from them),
+the same type with equal fields.
+"""
+function results_equal(@nospecialize(a), @nospecialize(b))
+    isequal(a, b) && return true
+    T = typeof(a)
+    (T === typeof(b) && T isa DataType && ismutabletype(T) && fieldcount(T) > 0) || return false
+    which(==, Tuple{T,T}).sig === Tuple{typeof(==),Any,Any} || return false
+    return all(1:fieldcount(T)) do i
+        isdefined(a, i) == isdefined(b, i) &&
+            (!isdefined(a, i) || results_equal(getfield(a, i), getfield(b, i)))
+    end
+end
+results_equal(a::Tuple, b::Tuple) =
+    isequal(a, b) || (length(a) == length(b) && all(results_equal(x, y) for (x, y) in zip(a, b)))
+
 "Whether `JULIACODEGEN_GC_STRESS=1` asks for a full collection before every execution."
 gc_stress() = get(ENV, "JULIACODEGEN_GC_STRESS", "0") == "1"
 
-"""
-The function that runs code compiled by JuliaCodegen in `@cgtest`. There is none yet: the
-compiler is added piece by piece, and this is set once it can run code.
-"""
-function cgrun(f, args...)
-    error("JuliaCodegen cannot run code yet")
-end
+# `cgrun(f, args...)`, which runs code compiled by JuliaCodegen, is in `jit.jl`.
 
 """
     @cgtest f(args...)
-    @cgtest run=r f(args...)
+    @cgtest run=r gc=true f(args...)
 
 Test that code compiled by JuliaCodegen (or by the runner `r`, a function called as
-`r(f, args...)`) behaves like native code for `f(args...)`, see [`differential`](@ref).
+`r(f, args...)`) behaves like native code for `f(args...)`, see [`differential`](@ref);
+with `gc`, a full collection runs before each execution (by default when
+`JULIACODEGEN_GC_STRESS=1`).
 """
 macro cgtest(exs...)
     ex = last(exs)
     Meta.isexpr(ex, :call) || error("@cgtest expects a call, got $ex")
     run = :cgrun
+    gc = :(gc_stress())
     for kw in exs[1:end-1]
-        Meta.isexpr(kw, :(=)) && kw.args[1] === :run ||
+        Meta.isexpr(kw, :(=)) && kw.args[1] in (:run, :gc) ||
             error("@cgtest: unknown option $kw")
-        run = kw.args[2]
+        kw.args[1] === :run ? (run = kw.args[2]) : (gc = kw.args[2])
     end
     f = ex.args[1]
     args = ex.args[2:end]
     any(a -> Meta.isexpr(a, (:kw, :parameters, :...)), args) &&
         error("@cgtest: keyword arguments and splatting are not supported")
-    :(@test differential($(esc(run)), $(esc(f)), $(map(esc, args)...)) == OK)
+    :(@test differential($(esc(run)), $(esc(f)), $(map(esc, args)...); gc=$(esc(gc))) == OK)
 end
 
 ## IR verification

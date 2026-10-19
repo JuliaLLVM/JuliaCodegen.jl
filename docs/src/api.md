@@ -77,6 +77,37 @@ JuliaCodegen.isconstant
 JuliaCodegen.constant_value
 ```
 
+## Generating functions
+
+```@docs
+JuliaCodegen.CGModule
+JuliaCodegen.unique_name
+JuliaCodegen.FuncInfo
+JuliaCodegen.FnCtx
+JuliaCodegen.AbstractFnCtx
+JuliaCodegen.walk_function!
+JuliaCodegen.operand
+JuliaCodegen.method_instance
+JuliaCodegen.get_ir
+JuliaCodegen.emit_entry!
+JuliaCodegen.declare_function!
+JuliaCodegen.signature_argtypes
+JuliaCodegen.emit_body!
+JuliaCodegen.emit_jlcall_wrapper!
+JuliaCodegen.literal_global
+JuliaCodegen.literal_objects
+JuliaCodegen.literal_pointer
+JuliaCodegen.const_value
+JuliaCodegen.insert_field
+JuliaCodegen.extract_field
+JuliaCodegen.smalltag
+JuliaCodegen.type_tag
+JuliaCodegen.emit_allocation
+JuliaCodegen.emit_box
+JuliaCodegen.emit_unbox
+JuliaCodegen.convert_repr
+```
+
 ## Targets
 
 ```@docs
