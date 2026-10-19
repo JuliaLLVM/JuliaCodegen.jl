@@ -51,6 +51,55 @@ end
 signature_argtypes(mi::Core.MethodInstance) =
     Any[Base.unwrap_unionall(mi.specTypes).parameters...]
 
+"""
+    JuliaCodegen.function_argtypes(mi) -> Vector{Any}
+
+The argument types of the function of `mi`, as its IR has them: those of its signature,
+with the varargs of a varargs method packed into a tuple.
+"""
+function function_argtypes(mi::Core.MethodInstance)
+    sig = signature_argtypes(mi)
+    m = mi.def
+    (m isa Method && m.isva) || return sig
+    n = Int(m.nargs)
+    return Any[sig[1:n-1]..., Tuple{sig[n:end]...}]
+end
+
+"""
+    JuliaCodegen.pack_varargs(fc, mi, args) -> Vector{CGVal}
+
+The arguments `args` of a call of the varargs method instance `mi`, one per element of its
+signature, with the varargs packed into the tuple its function takes.
+"""
+function pack_varargs(fc::FnCtx, mi::Core.MethodInstance, args::Vector{CGVal})
+    n = Int(mi.def.nargs)
+    rest = args[n:end]
+    TT = Tuple{(a.typ for a in rest)...}
+    PT = function_argtypes(mi)[n]
+    tup = if repr_kind(TT) === Ghost
+        ghost(TT, something(ghost_value(TT)))
+    elseif repr_kind(TT) === Inline
+        emit_new_inline(fc, TT, CGVal[convert_repr(fc, a, a.typ) for a in rest])
+    else
+        nothing
+    end
+    tup === nothing && (tup = emit_dynamic_call(fc, const_value(fc, Core.tuple), rest, TT))
+    return CGVal[args[1:n-1]..., convert_repr(fc, tup, PT)]
+end
+
+# whether `args` are of the types of the signature `sig` (whose last element may be a
+# `Vararg`)
+function args_match(sig::Vector{Any}, args::Vector{CGVal})
+    if !isempty(sig) && last(sig) isa Core.TypeofVararg
+        fixed = sig[1:end-1]
+        T = Base.unwrapva(last(sig))
+        length(args) >= length(fixed) || return false
+        return all(i -> args[i].typ <: fixed[i], eachindex(fixed)) &&
+               all(a -> a.typ <: T, args[length(fixed)+1:end])
+    end
+    return length(args) == length(sig) && all(i -> args[i].typ <: sig[i], eachindex(args))
+end
+
 # the pgcstack and the current task, and the safepoint on entry
 function emit_prologue!(fc::FnCtx; safepoint::Bool=true)
     b = fc.builder
@@ -296,16 +345,41 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
         debug_function!(fc, f)
         emit_prologue!(fc; safepoint=false)
         F, argv, _ = LLVM.parameters(f)
-        ops = LLVM.Value[]
-        for (i, T) in enumerate(info.argtypes)
-            repr_kind(T) === Ghost && continue
+        # the arguments, one per element of the signature (the varargs of a varargs method
+        # packed for its function)
+        sig = signature_argtypes(info.mi)
+        m = info.mi.def
+        nfixed = length(sig)
+        packed = nothing
+        if !isempty(sig) && last(sig) isa Core.TypeofVararg
+            # as many varargs as the call has: packed by the runtime (`jl_f_tuple`, the builtin)
+            nfixed = Int(m.nargs) - 1
+            ft = LLVM.FunctionType(T_tracked(), [T_tracked(), T_ptr(), LLVM.Int32Type()])
+            tf = declare_symbol(cgm, "jl_f_tuple", ft)
+            k = nfixed - 1     # (the function isn't in the array)
+            rest = LLVM.gep!(b, T_tracked(), argv, [LLVM.ConstantInt(LLVM.Int64Type(), k)])
+            n = LLVM.sub!(b, LLVM.parameters(f)[3], LLVM.ConstantInt(LLVM.Int32Type(), k))
+            packed = boxed(info.argtypes[end], LLVM.call!(b, ft, tf, LLVM.Value[LLVM.null(T_tracked()), rest, n]))
+        end
+        args = CGVal[]
+        for (i, T) in enumerate(sig[1:nfixed])
             p = if i == 1
                 F
             else
                 slot = LLVM.gep!(b, T_tracked(), argv, [LLVM.ConstantInt(LLVM.Int64Type(), i - 2)])
                 tbaa!(fc, LLVM.load!(b, T_tracked(), slot; align=config(fc).target.pointer_size), :const)
             end
-            push!(ops, convert_repr(fc, boxed(Any, p), T).V)
+            push!(args, convert_repr(fc, boxed(Any, p), T))
+        end
+        if packed !== nothing
+            push!(args, packed)
+        elseif m isa Method && m.isva
+            args = pack_varargs(fc, info.mi, args)
+        end
+        ops = LLVM.Value[]
+        for (a, T) in zip(args, info.argtypes)
+            repr_kind(T) === Ghost && continue
+            push!(ops, convert_repr(fc, a, T).V)
         end
         r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, ops)
         # (the entry is the function, as native code's: inlined by any pipeline)
@@ -329,7 +403,7 @@ end
 
 The function of `mi` in the module, declared on first use and queued for emission: its
 body from its IR, or a stub that calls its native code (for methods that always throw,
-which are error paths, and varargs methods, for now).
+which are error paths).
 """
 function get_function!(cgm::CGModule, mi::Core.MethodInstance)
     info = get(cgm.funcs, mi, nothing)
@@ -339,23 +413,19 @@ function get_function!(cgm::CGModule, mi::Core.MethodInstance)
     ir = nothing
     rt = Any
     reason = nothing
-    if m.isva
-        reason = "a varargs method"
-    else
-        try
-            ir, rt = cgm.ir_source(mi, cgm.world)
-        catch err
-            err isa Unsupported || rethrow()
-            # (calling native code instead follows the configuration's policy)
-            handle_failure(cgm.config, mi, err, catch_backtrace())
-            reason = err
-        end
-        if ir !== nothing && rt === Union{} && cgm.throwing_stubs
-            reason = "a method that always throws"
-            ir = nothing
-        end
+    try
+        ir, rt = cgm.ir_source(mi, cgm.world)
+    catch err
+        err isa Unsupported || rethrow()
+        # (calling native code instead follows the configuration's policy)
+        handle_failure(cgm.config, mi, err, catch_backtrace())
+        reason = err
     end
-    info = declare_function!(cgm, mi, signature_argtypes(mi), ir === nothing ? Any : rt)
+    if ir !== nothing && rt === Union{} && cgm.throwing_stubs
+        reason = "a method that always throws"
+        ir = nothing
+    end
+    info = declare_function!(cgm, mi, function_argtypes(mi), ir === nothing ? Any : rt)
     push!(cgm.worklist, (info, ir === nothing ? reason : ir))
     return info
 end
@@ -412,7 +482,31 @@ function emit_stub!(cgm::CGModule, info::FuncInfo)
         debug_function!(fc, info.llvmf)
         emit_prologue!(fc; safepoint=false)
         bind_arguments!(fc)
-        r = emit_dynamic_call(fc, fc.args[1], fc.args[2:end], info.rettype; invoke=info.mi)
+        args = fc.args
+        m = info.mi.def
+        r = nothing
+        if m isa Method && m.isva
+            # the native code of the method takes the varargs one by one
+            tup = args[end]
+            PT = tup.typ
+            elems = PT isa DataType && !Base.isvatuple(PT) ? CGVal[] : nothing
+            for i in 1:(elems === nothing ? 0 : fieldcount(PT))
+                e = emit_builtin(fc, Core.getfield, CGVal[tup, const_value(fc, i)], fieldtype(PT, i))
+                e === nothing && (elems = nothing; break)
+                push!(elems, e)
+            end
+            if elems !== nothing
+                args = CGVal[args[1:end-1]..., elems...]
+            else
+                # as many as the tuple has: splat it (`f(fixed..., tup...)`)
+                fixed = emit_dynamic_call(fc, const_value(fc, Core.tuple), args[2:end-1],
+                                          Tuple{(a.typ for a in args[2:end-1])...})
+                r = emit_dynamic_call(fc, const_value(fc, Core._apply_iterate),
+                                      CGVal[const_value(fc, iterate), args[1], fixed, tup], info.rettype)
+            end
+        end
+        r === nothing &&
+            (r = emit_dynamic_call(fc, args[1], args[2:end], info.rettype; invoke=info.mi))
         emit_return!(fc, r)
     end
 end

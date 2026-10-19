@@ -15,6 +15,10 @@ c_less_specific(x::Int) = invoke(c_generic, Tuple{Number}, x)
 c_call_throws(x) = x > 0 ? x : c_throws(x)
 @noinline c_vararg(xs...) = length(xs)
 c_call_vararg(x) = c_vararg(x, x, x)
+@noinline c_vararg2(x, xs...) = x + sum(xs)
+c_call_vararg2(x) = c_vararg2(x, x, 2x) + c_vararg2(x, 1)
+@noinline c_vararg_any(xs...) = map(string, xs)
+c_call_vararg_any(x) = c_vararg_any(x, "s", 1.5)
 c_closure(x) = (y -> x + y)(3)
 # (a calling convention JuliaCodegen doesn't support, which native code only compiles for
 # x86: LLVM aborts on other targets)
@@ -54,12 +58,28 @@ c_run_fallback(f, args...) = cgrun(f, args...; config=C_FALLBACK)
     @cgtest c_sum_found(collect(1:30))
 end
 
+@testset "varargs" begin
+    # the varargs in the tuple the function takes, as its IR has them
+    @cgtest c_call_vararg(1)
+    @cgtest c_call_vararg2(3)
+    @cgtest c_call_vararg_any(7)
+    @test !any(((mi, why),) -> mi.def.name in (:c_vararg, :c_vararg2), test_fallbacks(c_call_vararg2, (Int,)))
+    # a specialized varargs method: called directly, with the varargs in a tuple; one whose
+    # signature has a `Vararg` (as inference keeps two or more varargs here): through the
+    # runtime, with the arguments one by one
+    ir = test_ir(c_call_vararg2, (Int,))
+    @test occursin(r"call i64 @julia_c_vararg2_\d+\(i64 %\d+, \[1 x i64\]", ir)
+    @test occursin("@ijl_invoke", ir)
+    # a varargs entry
+    @cgtest c_vararg2(1, 2, 3)
+    @cgtest c_vararg(1, "two")
+end
+
 @testset "stubs" begin
     # always throws: an error path, called through the runtime
     @cgtest c_call_throws(1)
     @cgtest c_call_throws(-1)
     @test any(((mi, why),) -> mi.def.name === :c_throws, test_fallbacks(c_call_throws, (Int,)))
-    # varargs methods, for now
     @cgtest c_call_vararg(1)
     # a callee with an unsupported construct calls its native code, or throws when the
     # configuration says so

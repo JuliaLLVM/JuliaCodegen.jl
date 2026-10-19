@@ -38,17 +38,18 @@ function ei_codeinfos(mi; world=Base.get_world_counter(), exclude=())
     interp = EIInterp(world)
     out = Pair{Core.CodeInstance,Core.CodeInfo}[]
     seen = IdSet{Core.MethodInstance}()
-    work = [mi]
+    work = Any[mi]      # (method instances, and the CodeInstances `:invoke`s refer to)
     while !isempty(work)
-        m = pop!(work)
+        t = pop!(work)
+        m = t isa Core.CodeInstance ? CC.get_ci_mi(t) : t
         (m in seen || m.def.name in exclude) && continue
         push!(seen, m)
-        ci = CC.typeinf_ext_toplevel(interp, m, CC.SOURCE_MODE_ABI)
+        ci = t isa Core.CodeInstance && t.inferred isa Core.CodeInfo ? t :
+             CC.typeinf_ext_toplevel(interp, m, CC.SOURCE_MODE_ABI)
         push!(out, ci => ci.inferred::Core.CodeInfo)
         for st in ci.inferred.code
             Meta.isexpr(st, :invoke) || continue
-            t = st.args[1]
-            push!(work, t isa Core.CodeInstance ? CC.get_ci_mi(t) : t)
+            push!(work, st.args[1])
         end
     end
     return out

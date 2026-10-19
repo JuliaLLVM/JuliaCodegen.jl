@@ -98,11 +98,16 @@ function emit_invoke_call(fc::FnCtx, mi::Core.MethodInstance, args::Vector{CGVal
     # a call whose arguments may not match the signature (an invoke of a less specific
     # method with more specific arguments is fine; others are left to the runtime)
     sig = signature_argtypes(mi)
-    if !(mi.def isa Method) || mi.def.isva || any(T -> T isa Core.TypeofVararg, sig) ||
-       length(args) != length(sig) || !all(i -> args[i].typ <: sig[i], eachindex(args))
+    # (a varargs method instance whose signature has a `Vararg`, e.g. of an error path, is
+    # called through the runtime, with the arguments one by one; specialized ones are
+    # compiled)
+    if !(mi.def isa Method) || !args_match(sig, args) ||
+       (!isempty(sig) && last(sig) isa Core.TypeofVararg)
         return emit_dynamic_call(fc, args[1], args[2:end], typ; invoke=mi)
     end
     info = get_function!(fc.cgm, mi)
+    # (the varargs of a varargs method in the tuple its function takes)
+    mi.def.isva && (args = pack_varargs(fc, mi, args))
     r = emit_call_info(fc, info, args)
     r.kind === Bottom && return r
     return convert_repr(fc, r, typ)

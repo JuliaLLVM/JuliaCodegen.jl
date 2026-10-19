@@ -35,24 +35,31 @@ The CodeInstances that `interp` infers for `mi` and, transitively, for what its 
 function collect_codeinfos(interp::CC.AbstractInterpreter, mi::Core.MethodInstance)
     out = Pair{Core.CodeInstance,Core.CodeInfo}[]
     seen = IdSet{Core.MethodInstance}()
-    work = [mi]
+    # (a method instance, or the CodeInstance an `:invoke` refers to)
+    work = Any[mi]
     while !isempty(work)
-        m = popfirst!(work)
+        target = popfirst!(work)
+        m = target isa Core.CodeInstance ? CC.get_ci_mi(target) : target
         m in seen && continue
         push!(seen, m)
-        # (varargs methods are called through the runtime, for now)
-        m.def isa Method && m !== mi && m.def.isva && continue
-        ci = CC.typeinf_ext_toplevel(interp, m, CC.SOURCE_MODE_ABI)
+        ci = target isa Core.CodeInstance && target.inferred isa Core.CodeInfo ? target :
+             CC.typeinf_ext_toplevel(interp, m, CC.SOURCE_MODE_ABI)
+        # (inference may give the CodeInstance of another, normalized, method instance)
+        cm = CC.get_ci_mi(ci)
+        if cm !== m
+            cm in seen && continue
+            push!(seen, cm)
+        end
         src = ci.inferred
         if !(src isa Core.CodeInfo)
             # (inference keeps no source of functions with a constant result)
-            src = CC.typeinf_code(interp, m, true)
-            src isa Core.CodeInfo || unsupported("the code of ", m, ", which inference gives no source of")
+            src = CC.typeinf_code(interp, cm, true)
+            src isa Core.CodeInfo || unsupported("the code of ", cm, ", which inference gives no source of")
         end
         push!(out, ci => src)
         for stmt in src.code
             Meta.isexpr(stmt, :invoke) || continue
-            push!(work, invoke_target(stmt.args[1]))
+            push!(work, stmt.args[1])
         end
     end
     return out

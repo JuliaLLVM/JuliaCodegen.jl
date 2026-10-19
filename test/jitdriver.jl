@@ -52,7 +52,7 @@ end
         @test any(((mi, why),) -> mi.def.name === :jd_stdcall, jf.fallbacks)
         @test_throws JuliaCodegen.Unsupported jd_run(jd_call_stdcall, "four")
     end
-    # varargs callees are called through the runtime
+    # varargs callees
     @test jd_run(jd_call_vararg, 3) == 6
 end
 
