@@ -22,6 +22,13 @@ i_fence2() = (Core.Intrinsics.atomic_fence(:sequentially_consistent, :system); n
 # an intrinsic with the wrong number of arguments, which inference knows throws
 i_bad_intrinsic(x) = Core.Intrinsics.add_int(x)
 i_llvmcall(x::Int32) = Base.llvmcall("%r = add i32 %0, 1\nret i32 %r", Int32, Tuple{Int32}, x)
+# (pointers are integers of their size in the IR, as native code passes them)
+i_llvmcall_load(p::Ptr{Int32}) = Base.llvmcall("""
+    %p = inttoptr i64 %0 to i32*
+    %v = load i32, i32* %p, align 4
+    ret i32 %v""", Int32, Tuple{Ptr{Int32}}, p)
+i_llvmcall_ptr(p::Ptr{Int32}) = Base.llvmcall("%q = add i64 %0, 4\nret i64 %q", Ptr{Int32}, Tuple{Ptr{Int32}}, p)
+i_llvmcall_ptrs(v::Vector{Int32}) = GC.@preserve v (i_llvmcall_load(pointer(v)), i_llvmcall_ptr(pointer(v)) - pointer(v))
 i_poly(x) = 3x^2 - 2x + 1
 i_loop(n) = (s = 0; for i in 1:n; s += i; end; s)
 i_dynamic(f, x) = f(x)
@@ -95,6 +102,7 @@ end
     @cgtest i_fence2()
     @cgtest i_bad_intrinsic(1)
     @cgtest i_llvmcall(Int32(41))
+    @cgtest i_llvmcall_ptrs(Int32[7, 8])
 end
 
 @testset "code" begin

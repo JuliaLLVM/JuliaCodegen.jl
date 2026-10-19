@@ -400,8 +400,11 @@ end
 # %1, ...) or a `(module, entry)` pair. The IR is parsed into the module being emitted,
 # marked `alwaysinline`, and called.
 
-function llvmcall_type(fc::FnCtx, @nospecialize T)
+function llvmcall_type(fc::FnCtx, @nospecialize(T); ptr_as_int::Bool=false)
     (T === Nothing || T === Cvoid) && return LLVM.VoidType()
+    # (the IR of `Base.llvmcall` gets `Ptr` values as integers of their size, as native
+    # code passes them)
+    ptr_as_int && T isa DataType && T <: Ptr && return iptr_type(fc)
     repr_kind(T) === Inline || unsupported("llvmcall with the type ", T)
     ty = value_type(fc, T)
     # (llvmcall passes structs other than tuples as LLVM structs)
@@ -424,8 +427,8 @@ function emit_llvmcall(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     vals = args[4:end]
     ATs = AT isa DataType ? collect(Any, AT.parameters) : Any[]
     length(ATs) == length(vals) || return nothing
-    lrt = llvmcall_type(fc, RT)
-    lats = LLVM.LLVMType[llvmcall_type(fc, T) for T in ATs]
+    lrt = llvmcall_type(fc, RT; ptr_as_int=true)
+    lats = LLVM.LLVMType[llvmcall_type(fc, T; ptr_as_int=true) for T in ATs]
     cgm = fc.cgm
     if ir isa String
         name = unique_name(cgm, "jl_llvmcall")
@@ -451,12 +454,21 @@ function emit_llvmcall(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     for (v, T, t) in zip(vals, ATs, lats)
         cv = convert_repr(fc, v, T)
         cv.kind === Inline || unsupported("an llvmcall argument of type ", T)
-        push!(ops, LLVM.value_type(cv.V) == t ? cv.V : reinterpret_value(fc, cv.V, t))
+        push!(ops, llvmcall_value(fc, cv.V, t))
     end
     r = LLVM.call!(fc.builder, LLVM.function_type(f), f, ops)
     lrt isa LLVM.VoidType && return ghost(Nothing, nothing)
-    rty = value_type(fc, RT)
-    return inline(RT, LLVM.value_type(r) == rty ? r : reinterpret_value(fc, r, rty))
+    return inline(RT, llvmcall_value(fc, r, value_type(fc, RT)))
+end
+
+# a value as the LLVM type `ty` of llvmcall: pointers and integers converted, other types
+# reinterpreted
+function llvmcall_value(fc::FnCtx, v::LLVM.Value, ty::LLVM.LLVMType)
+    from = LLVM.value_type(v)
+    from == ty && return v
+    from isa LLVM.PointerType && ty isa LLVM.IntegerType && return LLVM.ptrtoint!(fc.builder, v, ty)
+    from isa LLVM.IntegerType && ty isa LLVM.PointerType && return LLVM.inttoptr!(fc.builder, v, ty)
+    return reinterpret_value(fc, v, ty)
 end
 
 """
