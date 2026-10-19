@@ -84,6 +84,9 @@ JuliaCodegen.emit_specsig_wrapper!
 JuliaCodegen.emit_specsig_call!
 JuliaCodegen.emit_cfunction
 JuliaCodegen.emit_llvmcall_cc
+JuliaCodegen.DebugInfo
+JuliaCodegen.debug_function!
+JuliaCodegen.finalize_debuginfo!
 JuliaCodegen.Entry
 JuliaCodegen.literal_global
 JuliaCodegen.literal_objects

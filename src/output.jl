@@ -30,6 +30,7 @@ What the module of `cgm` contains and refers to, see
 [`CodegenOutput`](@ref JuliaCodegen.CodegenOutput).
 """
 function codegen_output(cgm::CGModule)
+    finalize_debuginfo!(cgm)
     literals = sort!(literal_objects(cgm); by=first)
     return CodegenOutput(copy(cgm.entries), literals, external_symbols(cgm.mod, literals),
                          copy(cgm.fallbacks))

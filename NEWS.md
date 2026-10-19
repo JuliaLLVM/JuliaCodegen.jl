@@ -80,3 +80,7 @@
   for `getglobal` and `setglobal!` with constant arguments.
 - `ccall` in the `llvmcall` convention: calls of LLVM intrinsics (also ones LLVM doesn't
   know, left to back ends and validation), as GPU code uses them.
+- Debug information (`CodegenConfig(; debug_info)`, as Julia's `debug_info_kind`): line
+  tables, with a compile unit of the file `julia` as native code's, a subprogram for every
+  function (entries and wrappers included) and the location of every statement, with the
+  functions inlined at it as inlined frames.
