@@ -3,6 +3,13 @@
 `Pkg.test()` runs the package's tests, and [Aqua.jl](https://github.com/JuliaTesting/Aqua.jl)'s
 checks of the package. The helpers the tests share are in `test/testhelpers.jl`.
 
+CI runs them on Julia 1.12, 1.13, the latest prerelease and nightly. Locally, give each
+Julia version its own manifest, since `test/` and `docs/` share the package's manifest as
+workspace projects: create an empty `Manifest-v1.<minor>.toml` (e.g. with
+`touch Manifest-v1.14.toml`), then `julia +1.14-nightly --project -e 'using Pkg;
+Pkg.resolve(); Pkg.test()'`. A manifest resolved by one version can make another fail to
+precompile its standard libraries.
+
 ## Differential execution
 
 The main oracle is Julia's native code generator: `@cgtest f(args...)` runs `f(args...)`
@@ -22,5 +29,21 @@ whole modules.
 
 `verify_ir(mod)` checks a module in Julia's pre-lowering IR with LLVM's verifier, with
 [JuliaIR.jl](https://github.com/JuliaLLVM/JuliaIR.jl)'s GCInvariantVerifier (in its strong
-mode, for the IR dialect of the running Julia), and, on Julia builds that provide it, with
+mode), and, on Julia builds that provide it, with
 the Julia dialect's verifier.
+
+## Facts
+
+The facts about the running Julia that JuliaCodegen takes from JuliaIR.jl (its IR dialect
+and runtime facts) are compared with the IR of Julia's own code generator:
+`test/factprobe.jl` recovers them from native IR and from object headers, independently
+of JuliaIR.jl. `julia test/factprobe.jl` prints them.
+
+## Unreleased dependencies
+
+JuliaIR.jl and the LLVM.jl changes it needs are not released yet: `Project.toml` and
+`test/Project.toml` take them from their repositories (`[sources]`), and the LLVM.jl
+branch needs an LLVMExtra library built from source. CI builds it with
+`.github/actions/llvm-dev`. Locally, run LLVM.jl's `deps/build_local.jl` from a checkout of
+that branch under each Julia version, and copy the `LocalPreferences.toml` it writes into
+the package's root and `test/`.

@@ -22,14 +22,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ['1.12', '1.13', 'nightly']
+        version: ['1.12', '1.13', 'pre', 'nightly']
         os: ['ubuntu-latest', 'macOS-latest', 'windows-latest']
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
+          include-all-prereleases: true
       - uses: julia-actions/cache@v3
+      # until the LLVM.jl changes JuliaIR.jl uses are released
+      - uses: ./.github/actions/llvm-dev
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
@@ -55,6 +58,7 @@ jobs:
         with:
           version: '1.12'
       - uses: julia-actions/cache@v3
+      - uses: ./.github/actions/llvm-dev
       - name: Install dependencies
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate()'
       - name: Build and deploy
