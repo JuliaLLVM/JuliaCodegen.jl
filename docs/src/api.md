@@ -36,6 +36,12 @@ JuliaCodegen.AddrSpace
 ```@docs
 JuliaCodegen.emit_into!
 JuliaCodegen.CompiledFunctions
+JuliaCodegen.JIT
+JuliaCodegen.jit_compile
+JuliaCodegen.jit_call
+JuliaCodegen.JITFunction
+JuliaCodegen.JITInterpreter
+JuliaCodegen.collect_codeinfos
 ```
 
 ## Output and pipelines

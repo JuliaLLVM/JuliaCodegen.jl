@@ -43,5 +43,6 @@ include("cfunction.jl")
 include("ir.jl")
 include("output.jl")
 include("emit_into.jl")
+include("jit.jl")
 
 end
