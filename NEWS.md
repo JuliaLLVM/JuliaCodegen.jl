@@ -66,3 +66,8 @@
   (`CompiledFunctions`) and the `CodegenOutput`. `CGModule` takes the IR source.
 - `CodegenConfig`: `gcstack_arg` (specsig entries without the pgcstack argument, in the C
   calling convention) and `safepoint_on_entry`, as Julia's `CodegenParams`.
+- The JIT driver: `JIT`, `jit_compile` and `jit_call` compile calls into Julia's JIT
+  (LLVM.jl's `JuliaOJIT`) through `emit_into!`, with the IR of `JITInterpreter` (native
+  inference, with CodeInstances of its own that keep their sources, `collect_codeinfos`),
+  cached by CodeInstance (so redefining a method recompiles what depends on it), with
+  the objects the code refers to linked and kept alive, and thread-safe.

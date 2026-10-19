@@ -28,6 +28,7 @@ include("specsig.jl")
 include("cfunction.jl")
 include("output.jl")
 include("emit_into.jl")
+include("jitdriver.jl")
 include("cabi_targets.jl")
 
 @testset "Aqua" begin

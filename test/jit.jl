@@ -1,7 +1,8 @@
 # A minimal JIT for the tests: compile a call signature with JuliaCodegen, check that the
 # module is relocatable, give the globals of the objects the code refers to their
-# addresses, run Julia's pipeline, and add the module to Julia's JIT through LLVM.jl. The
-# drivers of the package come later.
+# addresses, run Julia's pipeline, and add the module to Julia's JIT through LLVM.jl. Unlike
+# the package's JIT driver (`JuliaCodegen.JIT`), it compiles with native inference's IR
+# and lets tests choose the entry they call.
 
 const TEST_CONFIG = Ref{Any}(nothing)
 function test_config()
@@ -73,7 +74,7 @@ function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config
                 verify_ir(mod)
                 JuliaCodegen.run_pipeline!(JuliaCodegen.JuliaCppPipeline(; opt_level=optimize ? 2 : 0),
                                            mod, config)
-                bind_pgcstack_resolver!(mod)
+                JuliaCodegen.bind_pgcstack_resolver!(mod)
             catch e
                 # (LLVM.jl wraps exceptions thrown in this callback)
                 err = e
@@ -86,20 +87,6 @@ function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config
         fptr = pointer(LLVM.lookup(jit, jd, name))
         TestCompiled(fptr, roots, ir, fallbacks)
     end
-end
-
-# Where TLS isn't ELF TLS (macOS, Windows), LowerPTLS calls `jl_get_pgcstack_resolved`,
-# which Julia's JIT registers as a named global. The dylibs LLVM.jl creates on Julia 1.14
-# and later don't see it, so the test JIT binds it to the runtime's getter itself.
-function bind_pgcstack_resolver!(mod::LLVM.Module)
-    haskey(mod.functions, "jl_get_pgcstack_resolved") || return
-    f = mod.functions["jl_get_pgcstack_resolved"]
-    LLVM.isdeclaration(f) || return
-    getter, key = Ref{Ptr{Cvoid}}(), Ref{Ptr{Cvoid}}()
-    ccall(:jl_pgcstack_getkey, Cvoid, (Ptr{Ptr{Cvoid}}, Ptr{Ptr{Cvoid}}), getter, key)
-    iptr = LLVM.IntType(8 * sizeof(Ptr{Cvoid}))
-    LLVM.replace_uses!(f, LLVM.const_inttoptr(LLVM.ConstantInt(iptr, UInt(getter[])), LLVM.value_type(f)))
-    LLVM.erase!(f)
 end
 
 """
