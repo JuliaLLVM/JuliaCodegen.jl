@@ -106,7 +106,8 @@ function emit_native_specsig_call!(cgm, @nospecialize(tt), name)
 end
 
 run_through_specsig(f, args...) = cgrun(f, args...; emit=emit_through_specsig!)
-run_native_specsig(f, args...) = cgrun(f, args...; emit=emit_native_specsig_call!)
+# (the address of the native code is embedded)
+run_native_specsig(f, args...) = cgrun(f, args...; emit=emit_native_specsig_call!, relocatable=false)
 
 const SS_CASES = [
     (ss_id, (Int,)), (ss_id, (Int8,)), (ss_id, (Bool,)), (ss_id, (UInt16,)), (ss_id, (Char,)),

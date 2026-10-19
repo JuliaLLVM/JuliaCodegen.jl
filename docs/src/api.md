@@ -31,6 +31,19 @@ JuliaCodegen.has_backend
 JuliaCodegen.AddrSpace
 ```
 
+## Output and pipelines
+
+```@docs
+JuliaCodegen.CodegenOutput
+JuliaCodegen.codegen_output
+JuliaCodegen.check_relocatable
+JuliaCodegen.Pipeline
+JuliaCodegen.JuliaCppPipeline
+JuliaCodegen.NoPipeline
+JuliaCodegen.CustomPipeline
+JuliaCodegen.run_pipeline!
+```
+
 ## Errors and failure policies
 
 ```@docs

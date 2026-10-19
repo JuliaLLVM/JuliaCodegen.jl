@@ -17,6 +17,19 @@ struct FuncInfo
 end
 
 """
+    JuliaCodegen.Entry(mi, name, abi)
+
+An entry point of a module: the function `name`, which calls the function of `mi` in the
+calling convention `abi`, `:jlcall` (`jl_value_t *(jl_value_t *F, jl_value_t **args,
+uint32_t nargs)`) or `:specsig` (see [`specsig_abi`](@ref JuliaCodegen.specsig_abi)).
+"""
+struct Entry
+    mi::Core.MethodInstance
+    name::String
+    abi::Symbol
+end
+
+"""
     JuliaCodegen.CGModule(mod::LLVM.Module, config::CodegenConfig; world)
 
 The state of generating code into the LLVM module `mod` (in the LLVM context it was
@@ -36,6 +49,8 @@ mutable struct CGModule
     literals::IdDict{Any,LLVM.GlobalVariable}
     "The functions whose bodies call native code instead (`emit_stub!`), and why."
     fallbacks::Vector{Pair{Core.MethodInstance,Any}}
+    "The entry points emitted."
+    entries::Vector{Entry}
     counter::Int
 end
 
@@ -44,7 +59,7 @@ function CGModule(mod::LLVM.Module, config::CodegenConfig; world::UInt=Base.get_
     mod.datalayout = config.target.datalayout
     return CGModule(mod, config, world, Layouts(config), TBAA(config.dialect),
                     IdDict{Core.MethodInstance,FuncInfo}(), Tuple{FuncInfo,Any}[],
-                    IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], 0)
+                    IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], Entry[], 0)
 end
 
 "A name that is unique in the module, from `prefix` and the function `f` (if any)."
