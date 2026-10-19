@@ -118,9 +118,10 @@ function statement_location!(fc::FnCtx, idx::Int)
                 subprogram!(di, name, fr.file, 0)
             end
         end
-        # (the column of the innermost location is the statement, as native code encodes it
-        # from Julia 1.14 on: tools map errors in the LLVM IR back to the Julia IR by it)
-        loc = LLVM.DILocation(max(Int(fr.line), 0), k == n ? idx : 0, scope, loc)
+        # (from Julia 1.14 on, the column of the innermost location is the statement, as
+        # native code encodes it: tools map errors in the LLVM IR back to the Julia IR by it)
+        col = k == n && config(fc).dialect.minor >= v"1.14" ? idx : 0
+        loc = LLVM.DILocation(max(Int(fr.line), 0), col, scope, loc)
     end
     LLVM.debug_location!(fc.builder, loc)
 end
