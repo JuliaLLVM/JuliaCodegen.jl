@@ -53,9 +53,18 @@ function declare_function!(cgm::CGModule, mi::Core.MethodInstance, argtypes::Vec
     LLVM.linkage!(llvmf, LLVM.API.LLVMInternalLinkage)
     init_function!(llvmf, cgm.config.target)
     rettype === Union{} && push!(llvmf.function_attributes, LLVM.EnumAttribute("noreturn"))
+    # (as native code's, for methods declared `@noinline`)
+    is_noinline(mi) && push!(llvmf.function_attributes, LLVM.EnumAttribute("noinline"))
     info = FuncInfo(mi, llvmf, argtypes, rettype)
     cgm.funcs[mi] = info
     return info
+end
+
+# whether the method of `mi` is declared `@noinline` (its source's inlining flag)
+function is_noinline(mi::Core.MethodInstance)
+    m = mi.def
+    (m isa Method && m.source !== nothing) || return false
+    return ccall(:jl_ir_flag_inlining, UInt8, (Any,), m.source) == 2
 end
 
 """

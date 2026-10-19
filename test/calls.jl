@@ -105,6 +105,12 @@ end
         @check "call { [8 x i8], i8, ptr addrspace(10) } @julia_c_maybe_"
         print(test_ir(c_use_maybe, (Int,)))
     end
+    # a function of a method declared `@noinline` isn't inlined, as native code's
+    @test @filecheck begin
+        @check "define internal i64 @julia_c_add_{{[0-9]+}}(i64 %0, i64 %1) [[ATTRS:#[0-9]+]]"
+        @check "attributes [[ATTRS]] = { noinline"
+        print(test_ir(c_calls, (Int,)))
+    end
 end
 
 end
