@@ -68,6 +68,9 @@ function emit_call!(fc::FnCtx, f::CGVal, ex::Expr, @nospecialize(typ))
     if isconstant(f) && constant_value(f) isa Core.IntrinsicFunction
         r = emit_intrinsic(fc, constant_value(f), args, typ)
         r === nothing || return r
+    elseif isconstant(f) && constant_value(f) isa Core.Builtin
+        r = emit_builtin(fc, constant_value(f), args, typ)
+        r === nothing || return r
     end
     return emit_dynamic_call(fc, f, args, typ)
 end

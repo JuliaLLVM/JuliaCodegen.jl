@@ -31,6 +31,8 @@ include("function.jl")
 include("runtime.jl")
 include("calls.jl")
 include("intrinsics.jl")
+include("egal.jl")
+include("builtins.jl")
 include("ir.jl")
 
 end

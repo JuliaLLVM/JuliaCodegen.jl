@@ -17,6 +17,7 @@ include("ops.jl")
 include("repr.jl")
 include("walker.jl")
 include("intrinsics.jl")
+include("builtins.jl")
 
 @testset "Aqua" begin
     using Aqua
