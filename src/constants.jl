@@ -11,14 +11,37 @@
 """
     JuliaCodegen.literal_global(cgm, x) -> LLVM.GlobalVariable
 
-The global of `cgm` that holds the address of the object `x`.
+The global of `cgm` that holds the address of the object `x`: for `true`, `false`,
+`nothing`, `()` and `Core.svec()`, the runtime's own (`jl_true`, ...), as native code's.
 """
 function literal_global(cgm::CGModule, @nospecialize x)
+    name = runtime_object_name(x)
+    name === nothing || return runtime_object_global(cgm, name)
     get!(cgm.literals, x) do
         gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), unique_name(cgm, "jl_global"))
         LLVM.linkage!(gv, LLVM.API.LLVMExternalLinkage)
         gv
     end
+end
+
+# The objects the runtime has globals of, which native code refers to by those
+# (`global_jlvalue_to_llvm` in codegen.cpp): GPU compilers relocate them by name.
+const RUNTIME_OBJECTS = (true => "jl_true", false => "jl_false", nothing => "jl_nothing",
+                         Core.svec() => "jl_emptysvec", () => "jl_emptytuple")
+
+function runtime_object_name(@nospecialize x)
+    for (obj, name) in RUNTIME_OBJECTS
+        x === obj && return name
+    end
+    return nothing
+end
+
+# the runtime's global `name`, which holds the address of its object
+function runtime_object_global(cgm::CGModule, name::String)
+    haskey(LLVM.globals(cgm.mod), name) && return LLVM.globals(cgm.mod)[name]
+    gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), name)
+    LLVM.constant!(gv, true)
+    return gv
 end
 
 """

@@ -50,6 +50,7 @@ const B_EGAL_PAIRS = Any[
     (missing, missing), (BNested(BPoint(0, 1), BRef(2, "x")), BNested(BPoint(0, 1), BRef(2, "x"))),
 ]
 
+b_objects(x) = Any[x > 0, nothing, ()]
 b_throw(x) = throw(ArgumentError(x))
 b_throw_singleton() = throw(DivideError())
 
@@ -165,6 +166,17 @@ end
         @check "@jl_egal__unboxed("
         print(test_ir(b_egal, (String, String)))
     end
+end
+
+@testset "the runtime's objects" begin
+    # `true`, `false`, `nothing`, `()` and `Core.svec()` through the runtime's globals, as
+    # native code refers to them
+    ir = test_ir(b_objects, (Int,))
+    for name in ("jl_true", "jl_false", "jl_nothing", "jl_emptytuple")
+        @test occursin("@$name = external constant ptr", ir)
+    end
+    @cgtest b_objects(1)
+    @cgtest b_objects(-1)
 end
 
 @testset "throw" begin

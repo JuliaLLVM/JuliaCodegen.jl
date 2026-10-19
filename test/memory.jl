@@ -97,8 +97,8 @@ end
     v = collect(1:100)
     cgrun(m_sum_found, v), cgrun(m_length, v)
     # (the least of a few measurements: a GC or another task may allocate meanwhile)
-    work = minimum(_ -> @allocated(cgrun(m_sum_found, v)), 1:3)
-    baseline = minimum(_ -> @allocated(cgrun(m_length, v)), 1:3)
+    work = minimum(_ -> @allocated(cgrun(m_sum_found, v)), 1:10)
+    baseline = minimum(_ -> @allocated(cgrun(m_length, v)), 1:10)
     @test work - baseline <= 64
     # element accesses are tied to their memory
     @test @filecheck begin
