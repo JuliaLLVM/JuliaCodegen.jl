@@ -49,6 +49,10 @@ function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbo
         push!(f.function_attributes, LLVM.EnumAttribute("willreturn"))
     elseif name === :jl_current_exception
         f = LLVM.Function(mod, sym, LLVM.FunctionType(T_tracked(), [T_ptr()]))
+    elseif name === :jl_undefined_var_error
+        # `void (jl_sym_t *var, jl_value_t *scope)`
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_rooted, T_rooted]))
+        push!(f.function_attributes, LLVM.EnumAttribute("noreturn"))
     elseif name === :jl_throw
         f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_rooted]))
         push!(f.function_attributes, LLVM.EnumAttribute("noreturn"))

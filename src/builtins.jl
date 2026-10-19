@@ -295,9 +295,71 @@ emit_new_dynamic!(fc::FnCtx, T::CGVal, args, @nospecialize(typ)) =
     emit_new_runtime(fc, T, CGVal[args...], typ)
 
 # a read of a global that is not constant, by the runtime
-nonconst_global(fc::FnCtx, ref::GlobalRef) =
-    emit_dynamic_call(fc, const_value(fc, Core.getglobal),
-                      CGVal[const_value(fc, ref.mod), const_value(fc, ref.name)], Any)
+# A global (not a constant) is read and written through its binding's `value`, as native
+# code does (`emit_globalop`): with an unordered load, or a release store and the binding's
+# write barrier. Bindings of other kinds (imported, not yet resolved) go through the
+# runtime, as do assignments of globals with a declared type, which convert the value.
+const BINDING_VALUE_OFFSET = fieldoffset(Core.Binding, Base.fieldindex(Core.Binding, :value))
+
+# the binding of the global `ref` in the world of the code and its declared type, if it is
+# a global
+function direct_binding(fc::FnCtx, ref::GlobalRef)
+    p = Base.lookup_binding_partition(codegen_world(fc), ref)
+    Base.binding_kind(p) == Base.PARTITION_KIND_GLOBAL || return nothing
+    return convert(Core.Binding, ref), p.restriction
+end
+
+# the address of the value of the binding `bnd`: an untracked pointer into it, as native
+# code addresses it (through the global that holds the binding's address)
+function binding_value_address(fc::FnCtx, bnd::Core.Binding)
+    t = literal_pointer(fc, bnd)
+    raw = t isa LLVM.AddrSpaceCastInst ? LLVM.operands(t)[1] : LLVM.addrspacecast!(fc.builder, t, T_ptr())
+    return LLVM.inbounds_gep!(fc.builder, LLVM.Int8Type(), raw, [iptr(fc, BINDING_VALUE_OFFSET)])
+end
+
+function nonconst_global(fc::FnCtx, ref::GlobalRef)
+    d = direct_binding(fc, ref)
+    if d === nothing
+        return emit_dynamic_call(fc, const_value(fc, Core.getglobal),
+                                 CGVal[const_value(fc, ref.mod), const_value(fc, ref.name)], Any)
+    end
+    bnd, T = d
+    b = fc.builder
+    v = LLVM.load!(b, T_tracked(), binding_value_address(fc, bnd))
+    LLVM.ordering!(v, LLVM.API.LLVMAtomicOrderingUnordered)
+    LLVM.alignment!(v, config(fc).target.pointer_size)
+    tbaa!(fc, v, :binding)
+    # undefined: an UndefVarError, from the runtime as native code's
+    f = current_function(fc)
+    err = LLVM.BasicBlock(f, "err")
+    ok = LLVM.BasicBlock(f, "ok")
+    LLVM.br!(b, nonnull(fc, v), ok, err)
+    LLVM.position!(b, LLVM.at_end(err))
+    rooted(x) = LLVM.addrspacecast!(b, literal_pointer(fc, x), LLVM.PointerType(AddrSpace.CalleeRooted))
+    uve = declare_runtime(fc.cgm.mod, dialect(fc), :jl_undefined_var_error)
+    LLVM.call!(b, LLVM.function_type(uve), uve, LLVM.Value[rooted(ref.name), rooted(ref.mod)])
+    LLVM.unreachable!(b)
+    LLVM.position!(b, LLVM.at_end(ok))
+    return boxed(T isa Type ? T : Any, v)
+end
+
+# `global ref = v` of a global of type `Any` through its binding, as native code does;
+# `false` for other bindings
+function emit_binding_assignment!(fc::FnCtx, ref::GlobalRef, v::CGVal)
+    d = direct_binding(fc, ref)
+    (d === nothing || d[2] !== Any) && return false
+    bnd, _ = d
+    b = fc.builder
+    p = emit_box(fc, v)
+    addr = binding_value_address(fc, bnd)
+    st = LLVM.store!(b, p, addr)
+    LLVM.ordering!(st, LLVM.API.LLVMAtomicOrderingRelease)
+    LLVM.alignment!(st, config(fc).target.pointer_size)
+    tbaa!(fc, st, :binding)
+    write_barrier!(b, fc.cgm.mod, dialect(fc), literal_pointer(fc, bnd),
+                   LLVM.addrspacecast!(b, addr, T_derived()), p)
+    return true
+end
 
 # the field index of the constant field `f` of `T`
 function field_index(@nospecialize(T), f::CGVal)
@@ -482,8 +544,23 @@ function emit_getglobal(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     m, s = constant_value(args[1]), constant_value(args[2])
     (m isa Module && s isa Symbol) || return nothing
     c = const_global(fc.cgm.world, m, s)
-    c === nothing && return nothing
-    return const_value(fc, something(c))
+    c === nothing || return const_value(fc, something(c))
+    # a global, through its binding
+    ref = GlobalRef(m, s)
+    direct_binding(fc, ref) === nothing && return nothing
+    return convert_repr(fc, nonconst_global(fc, ref), rt)
+end
+
+# `setglobal!(m, s, x, [order])` of a global of type `Any` with the default (release) order,
+# through its binding
+function emit_setglobal!(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
+    (length(args) in (3, 4) && isconstant(args[1]) && isconstant(args[2])) || return nothing
+    length(args) == 4 && !(isconstant(args[4]) && constant_value(args[4]) === :release) &&
+        return nothing
+    m, s = constant_value(args[1]), constant_value(args[2])
+    (m isa Module && s isa Symbol) || return nothing
+    emit_binding_assignment!(fc, GlobalRef(m, s), args[3]) || return nothing
+    return convert_repr(fc, args[3], rt)
 end
 
 # `isdefined(x, field)` with a constant field of a concrete type
@@ -519,6 +596,7 @@ const BUILTINS = IdDict{Any,Function}(
     Core.throw => emit_throw,
     Core.sizeof => emit_sizeof,
     Core.getglobal => emit_getglobal,
+    Core.setglobal! => emit_setglobal!,
 )
 
 """
