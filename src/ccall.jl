@@ -262,8 +262,22 @@ function runtime_symbol_name(sym::Symbol)
     isempty(hs) && return nothing
     iname = Symbol("i", sym)
     own_dlsym(hs[1], iname) != C_NULL && return String(iname)
-    any(h -> own_dlsym(h, sym) != C_NULL, hs) && return String(sym)
     return nothing
+end
+
+# the runtime's libraries as `jl_dlfind` names them (pointers that are not strings,
+# `JL_EXE_LIBNAME` etc.), with the globals of their handles
+const RUNTIME_LIBRARIES = Dict(1 => "jl_exe_handle", 2 => "jl_libjulia_handle",
+                               3 => "jl_libjulia_internal_handle")
+
+# the library that defines `sym` as native code finds it (`jl_dlfind`): `nothing` (any
+# library), a library name (on Windows, which has no global symbol namespace, the C
+# runtime, kernel32, ...), or one of the runtime's libraries (an `Int`, see above)
+function find_library(sym::Symbol)
+    found = ccall(:jl_dlfind, Ptr{UInt8}, (Cstring,), String(sym))
+    found == C_NULL && return nothing
+    haskey(RUNTIME_LIBRARIES, Int(UInt(found))) && return Int(UInt(found))
+    return unsafe_string(found)
 end
 
 # an external declaration: a function of type `ft`, or without `ft`, a global
@@ -276,8 +290,8 @@ function declare_symbol(cgm::CGModule, name::String, ft=nothing)
 end
 
 # a module-owned `ptr` global, initially null
-function symbol_cache!(cgm::CGModule, prefix::String)
-    gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), unique_name(cgm, prefix))
+function symbol_cache!(cgm::CGModule, prefix::String, suffix::String="")
+    gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), unique_name(cgm, prefix) * suffix)
     LLVM.initializer!(gv, LLVM.null(T_ptr()))
     LLVM.linkage!(gv, LLVM.API.LLVMInternalLinkage)
     return gv
@@ -307,16 +321,14 @@ function emit_symbol_address(fc::FnCtx, sym::Symbol, @nospecialize(lib); ft=noth
     if lib === nothing && libexpr === nothing
         rname = runtime_symbol_name(sym)
         rname === nothing || return declare_symbol(cgm, rname, ft)
-        # the library that defines it, as native code finds it (`jl_dlfind`): on Windows,
-        # which has no global symbol namespace, the C runtime, kernel32, ...
-        found = ccall(:jl_dlfind, Cstring, (Cstring,), String(sym))
-        found == C_NULL || (lib = unsafe_string(found))
+        lib = find_library(sym)
     end
     b = fc.builder
     P = T_ptr()
     W = config(fc).target.pointer_size
-    dynamic = libexpr !== nothing || !(lib === nothing || lib isa Union{String,Symbol})
-    cache = symbol_cache!(cgm, "ccall_" * String(sym))
+    dynamic = libexpr !== nothing || !(lib === nothing || lib isa Union{String,Symbol,Int})
+    # (named as native code's lazily bound functions, `jlplt_name_N_got`)
+    cache = symbol_cache!(cgm, "jlplt_" * String(sym), "_got")
     cached = LLVM.load!(b, P, cache; align=W, ordering=LLVM.API.LLVMAtomicOrderingUnordered)
     from = current_block(b)
     f = current_function(fc)
@@ -330,8 +342,15 @@ function emit_symbol_address(fc::FnCtx, sym::Symbol, @nospecialize(lib); ft=noth
         LLVM.call!(b, LLVM.function_type(lf), lf, LLVM.Value[libv, literal_pointer(fc, sym)])
     else
         lf = declare_runtime(cgm.mod, dialect(fc), :jl_load_and_lookup)
-        libname, hnd = lib === nothing ? (LLVM.null(P), declare_symbol(cgm, "jl_RTLD_DEFAULT_handle")) :
-                                         (cstring!(cgm, String(lib)), symbol_cache!(cgm, "ccalllib"))
+        libname, hnd = if lib === nothing
+            LLVM.null(P), declare_symbol(cgm, "jl_RTLD_DEFAULT_handle")
+        elseif lib isa Int
+            # one of the runtime's libraries, by `jl_dlfind`'s name and its handle's global
+            LLVM.const_inttoptr(LLVM.ConstantInt(iptr_type(fc), lib), P),
+            declare_symbol(cgm, RUNTIME_LIBRARIES[lib])
+        else
+            cstring!(cgm, String(lib)), symbol_cache!(cgm, "ccalllib")
+        end
         LLVM.call!(b, LLVM.function_type(lf), lf, LLVM.Value[libname, cstring!(cgm, String(sym)), hnd])
     end
     LLVM.store!(b, found, cache; align=W, ordering=LLVM.API.LLVMAtomicOrderingRelease)
