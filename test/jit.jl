@@ -110,13 +110,15 @@ test_fallbacks(@nospecialize(f), @nospecialize(types); config=test_config()) =
     test_compile(Tuple{Core.Typeof(f), types...}; config).fallbacks
 
 """
-    test_module_ir(f, types; triple) -> String
+    test_module_ir(f, types; triple, datalayout=nothing) -> String
 
 The (unoptimized) module that JuliaCodegen generates for `f(::types...)` for the target
-`triple`, which need not be the host's: the code is not run.
+`triple` (with the data layout `datalayout`, if given), which need not be the host's: the
+code is not run.
 """
-function test_module_ir(@nospecialize(f), @nospecialize(types); triple::AbstractString)
-    config = JuliaCodegen.CodegenConfig(; target=JuliaCodegen.Target(; triple),
+function test_module_ir(@nospecialize(f), @nospecialize(types); triple::AbstractString,
+                        datalayout=nothing)
+    config = JuliaCodegen.CodegenConfig(; target=JuliaCodegen.Target(; triple, datalayout),
                                         on_unsupported=:error, on_internal_error=:error)
     @dispose ctx=LLVM.Context() mod=LLVM.Module("jctarget") begin
         cgm = JuliaCodegen.CGModule(mod, config)

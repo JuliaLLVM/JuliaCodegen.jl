@@ -88,14 +88,16 @@ function llvm_constant(fc::FnCtx, @nospecialize(x), @nospecialize(T))
         U = Dict(1 => UInt8, 2 => UInt16, 4 => UInt32, 8 => UInt64, 16 => UInt128)[sizeof(T)]
         return LLVM.ConstantInt(ty, reinterpret(U, x))
     end
-    elements = LLVM.Constant[]
+    # the elements, by their index: the fields, and zero padding (of a padded struct)
+    elements = ty isa LLVM.StructType ? LLVM.Constant[LLVM.null(t) for t in LLVM.elements(ty)] :
+               Vector{LLVM.Constant}(undef, count(>=(0), lay.fieldidx))
     for i in 1:fieldcount(T)
         lay.fieldidx[i] < 0 && continue
         s = lay.storage[i]
-        if s === FieldInline
-            push!(elements, llvm_constant(fc, getfield(x, i), fieldtype(T, i)))
+        elements[lay.fieldidx[i] + 1] = if s === FieldInline
+            llvm_constant(fc, getfield(x, i), fieldtype(T, i))
         elseif s === FieldPointer
-            push!(elements, LLVM.null(T_tracked()))
+            LLVM.null(T_tracked())
         else
             unsupported("a constant of ", T, " with a field stored as ", s)
         end
