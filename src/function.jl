@@ -87,6 +87,7 @@ function emit_body!(cgm::CGModule, info::FuncInfo, ir::CC.IRCode)
         top = LLVM.BasicBlock(info.llvmf, "top")
         LLVM.position!(b, LLVM.at_end(top))
         fc = FnCtx(cgm, info, ir, b, top)
+        debug_function!(fc, info.llvmf)
         emit_prologue!(fc)
         bind_arguments!(fc)
         for i in 1:length(ir.cfg.blocks)
@@ -109,6 +110,7 @@ end
 ## walker hooks
 
 begin_block!(fc::FnCtx, bi::Int) = LLVM.position!(fc.builder, LLVM.at_end(fc.blocks[bi]))
+begin_stmt!(fc::FnCtx, idx::Int) = statement_location!(fc, idx)
 
 # A block is dead when no edge into it was emitted and every predecessor has been
 # emitted already (an earlier block in the IR's order).
@@ -291,6 +293,7 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
         top = LLVM.BasicBlock(f, "top")
         LLVM.position!(b, LLVM.at_end(top))
         fc = FnCtx(cgm, info, nothing, b, top)
+        debug_function!(fc, f)
         emit_prologue!(fc; safepoint=false)
         F, argv, _ = LLVM.parameters(f)
         ops = LLVM.Value[]
@@ -406,6 +409,7 @@ function emit_stub!(cgm::CGModule, info::FuncInfo)
         top = LLVM.BasicBlock(info.llvmf, "top")
         LLVM.position!(b, LLVM.at_end(top))
         fc = FnCtx(cgm, info, nothing, b, top)
+        debug_function!(fc, info.llvmf)
         emit_prologue!(fc; safepoint=false)
         bind_arguments!(fc)
         r = emit_dynamic_call(fc, fc.args[1], fc.args[2:end], info.rettype; invoke=info.mi)

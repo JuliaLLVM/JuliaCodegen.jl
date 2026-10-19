@@ -59,6 +59,8 @@ mutable struct CGModule
     entries::Vector{Entry}
     ir_source::Any
     throwing_stubs::Bool
+    "The debug information (a `DebugInfo`), created on first use."
+    debuginfo::Any
     counter::Int
 end
 
@@ -69,7 +71,7 @@ function CGModule(mod::LLVM.Module, config::CodegenConfig; world::UInt=Base.get_
     return CGModule(mod, config, world, Layouts(config), TBAA(config.dialect),
                     IdDict{Core.MethodInstance,FuncInfo}(), Tuple{FuncInfo,Any}[],
                     IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], Entry[], ir_source,
-                    throwing_stubs, 0)
+                    throwing_stubs, nothing, 0)
 end
 
 "A name that is unique in the module, from `prefix` and the function `f` (if any)."
@@ -115,6 +117,8 @@ mutable struct FnCtx <: AbstractFnCtx
     "The stack slot of each PhiC, and the PhiC each Upsilon feeds."
     phic_slots::Dict{Int,LLVM.Value}
     upsilon_to_phic::Dict{Int,Int}
+    "The subprogram of the function, with debug information."
+    subprogram::Union{Nothing,LLVM.DISubprogram}
 end
 
 function FnCtx(cgm::CGModule, info::FuncInfo, ir, builder::LLVM.IRBuilder, top::LLVM.BasicBlock)
@@ -124,7 +128,8 @@ function FnCtx(cgm::CGModule, info::FuncInfo, ir, builder::LLVM.IRBuilder, top::
                  LLVM.BasicBlock[], [Tuple{Int,LLVM.BasicBlock}[] for _ in 1:nb],
                  Tuple{Int,Int,LLVM.Instruction}[], 0, top, nothing, nothing, IdDict{Any,LLVM.Value}(),
                  Dict{Int,LLVM.Value}(), Dict{Int,LLVM.Value}(),
-                 Dict{Int,Tuple{LLVM.Value,LLVM.Value}}(), Dict{Int,LLVM.Value}(), Dict{Int,Int}())
+                 Dict{Int,Tuple{LLVM.Value,LLVM.Value}}(), Dict{Int,LLVM.Value}(), Dict{Int,Int}(),
+                 nothing)
 end
 
 config(fc::FnCtx) = fc.cgm.config

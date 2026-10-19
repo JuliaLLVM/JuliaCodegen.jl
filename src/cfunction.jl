@@ -137,6 +137,7 @@ function emit_cfunction_wrapper!(cgm::CGModule, info::FuncInfo, @nospecialize(fo
         top = LLVM.BasicBlock(w, "top")
         LLVM.position!(b, LLVM.at_end(top))
         wc = FnCtx(cgm, info, nothing, b, top)
+        debug_function!(wc, w)
         facts = cgm.config.runtime
         wc.pgcstack = call_op!(wc, "julia.get_pgcstack_or_new"; name="pgcstack")
         wc.current_task = current_task!(b, facts, wc.pgcstack)

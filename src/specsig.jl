@@ -155,6 +155,7 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
         top = LLVM.BasicBlock(f, "top")
         LLVM.position!(b, LLVM.at_end(top))
         fc = FnCtx(cgm, info, nothing, b, top)
+        debug_function!(fc, f)
         ps = LLVM.parameters(f)
         p = sig.ret === :sret ? 2 : 1
         if sig.gcstack
