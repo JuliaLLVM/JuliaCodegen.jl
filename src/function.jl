@@ -305,6 +305,8 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
             push!(ops, convert_repr(fc, boxed(Any, p), T).V)
         end
         r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, ops)
+        # (the entry is the function, as native code's: inlined by any pipeline)
+        push!(LLVM.function_attributes(r), LLVM.EnumAttribute("alwaysinline"))
         rt = info.rettype
         k = repr_kind(rt)
         if k === Bottom

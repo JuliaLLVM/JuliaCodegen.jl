@@ -176,6 +176,8 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
             push!(ops, convert_repr(fc, cv, T).V)
         end
         r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, ops)
+        # (the entry is the function, as native code's: inlined by any pipeline)
+        push!(LLVM.function_attributes(r), LLVM.EnumAttribute("alwaysinline"))
         if sig.ret === :sret
             st = LLVM.store!(b, r, ps[1])
             LLVM.alignment!(st, Base.datatype_alignment(info.rettype))
