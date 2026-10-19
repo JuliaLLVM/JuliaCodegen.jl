@@ -60,3 +60,9 @@
   the addresses a module embeds (the tests check every module); deterministic names and
   object order; and the pass pipelines (`JuliaCppPipeline`, `NoPipeline`,
   `CustomPipeline`, `run_pipeline!`).
+- `emit_into!`: compile a closed set of CodeInstances, with the sources the caller's
+  interpreter inferred, into the caller's module (the driver for GPUCompiler.jl and
+  Enzyme.jl, as Julia's `jl_emit_native`), returning each one's jlcall and specsig entries
+  (`CompiledFunctions`) and the `CodegenOutput`. `CGModule` takes the IR source.
+- `CodegenConfig`: `gcstack_arg` (specsig entries without the pgcstack argument, in the C
+  calling convention) and `safepoint_on_entry`, as Julia's `CodegenParams`.

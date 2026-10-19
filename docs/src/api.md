@@ -31,6 +31,13 @@ JuliaCodegen.has_backend
 JuliaCodegen.AddrSpace
 ```
 
+## Drivers
+
+```@docs
+JuliaCodegen.emit_into!
+JuliaCodegen.CompiledFunctions
+```
+
 ## Output and pipelines
 
 ```@docs

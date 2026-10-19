@@ -30,12 +30,18 @@ struct Entry
 end
 
 """
-    JuliaCodegen.CGModule(mod::LLVM.Module, config::CodegenConfig; world)
+    JuliaCodegen.CGModule(mod::LLVM.Module, config::CodegenConfig; world, ir_source=get_ir,
+                          throwing_stubs=true)
 
 The state of generating code into the LLVM module `mod` (in the LLVM context it was
 created in): the functions emitted for method instances, the objects the code refers to,
 and the per-context type layouts and TBAA metadata. Names are numbered per module, so that
 generating the same code twice gives the same IR.
+
+The IR of a function comes from `ir_source(mi, world) -> (ir, rettype)`, by default
+Julia's native inference ([`get_ir`](@ref JuliaCodegen.get_ir)); it throws `Unsupported`
+for functions it has no IR for. With `throwing_stubs`, functions that always throw (error
+paths) call their native code instead of being compiled.
 """
 mutable struct CGModule
     mod::LLVM.Module
@@ -51,15 +57,19 @@ mutable struct CGModule
     fallbacks::Vector{Pair{Core.MethodInstance,Any}}
     "The entry points emitted."
     entries::Vector{Entry}
+    ir_source::Any
+    throwing_stubs::Bool
     counter::Int
 end
 
-function CGModule(mod::LLVM.Module, config::CodegenConfig; world::UInt=Base.get_world_counter())
+function CGModule(mod::LLVM.Module, config::CodegenConfig; world::UInt=Base.get_world_counter(),
+                  ir_source=get_ir, throwing_stubs::Bool=true)
     mod.triple = config.target.triple
     mod.datalayout = config.target.datalayout
     return CGModule(mod, config, world, Layouts(config), TBAA(config.dialect),
                     IdDict{Core.MethodInstance,FuncInfo}(), Tuple{FuncInfo,Any}[],
-                    IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], Entry[], 0)
+                    IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], Entry[], ir_source,
+                    throwing_stubs, 0)
 end
 
 "A name that is unique in the module, from `prefix` and the function `f` (if any)."

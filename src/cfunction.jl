@@ -212,7 +212,8 @@ function emit_cfunction_call!(wc::FnCtx, @nospecialize(sigt), @nospecialize(decl
     T_size = size_type(cgm)
     P = T_ptr()
     spec = try
-        specsig_abi(cgm, Any[sigt.parameters...], declrt)
+        # (the runtime's convention, which passes the pgcstack)
+        specsig_abi(cgm, Any[sigt.parameters...], declrt; gcstack_arg=true)
     catch err
         err isa Unsupported || rethrow()
         nothing             # (the jlcall convention)

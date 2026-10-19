@@ -57,7 +57,7 @@ function emit_prologue!(fc::FnCtx; safepoint::Bool=true)
     cfg = config(fc)
     fc.pgcstack = get_pgcstack!(b, fc.cgm.mod, cfg.dialect)
     fc.current_task = current_task!(b, cfg.runtime, fc.pgcstack)
-    if safepoint
+    if safepoint && cfg.safepoint_on_entry
         ptls = current_ptls!(b, cfg, fc.cgm.tbaa, fc.current_task)
         safepoint_poll!(b, fc.cgm.mod, cfg, fc.cgm.tbaa, ptls)
     end
@@ -305,6 +305,8 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
             push!(ops, convert_repr(fc, boxed(Any, p), T).V)
         end
         r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, ops)
+        # (the entry is the function, as native code's: inlined by any pipeline)
+        push!(LLVM.function_attributes(r), LLVM.EnumAttribute("alwaysinline"))
         rt = info.rettype
         k = repr_kind(rt)
         if k === Bottom
@@ -338,12 +340,17 @@ function get_function!(cgm::CGModule, mi::Core.MethodInstance)
         reason = "a varargs method"
     else
         try
-            ir, rt = get_ir(mi, cgm.world)
+            ir, rt = cgm.ir_source(mi, cgm.world)
         catch err
             err isa Unsupported || rethrow()
+            # (calling native code instead follows the configuration's policy)
+            handle_failure(cgm.config, mi, err, catch_backtrace())
             reason = err
         end
-        ir !== nothing && rt === Union{} && (reason = "a method that always throws"; ir = nothing)
+        if ir !== nothing && rt === Union{} && cgm.throwing_stubs
+            reason = "a method that always throws"
+            ir = nothing
+        end
     end
     info = declare_function!(cgm, mi, signature_argtypes(mi), ir === nothing ? Any : rt)
     push!(cgm.worklist, (info, ir === nothing ? reason : ir))
