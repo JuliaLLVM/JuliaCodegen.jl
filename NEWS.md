@@ -71,3 +71,6 @@
   inference, with CodeInstances of its own that keep their sources, `collect_codeinfos`),
   cached by CodeInstance (so redefining a method recompiles what depends on it), with
   the objects the code refers to linked and kept alive, and thread-safe.
+- Layouts for targets whose data layout aligns a field differently than Julia does (e.g.
+  `Int128` on SPIR-V, Metal and BPF): a packed struct with the fields at Julia's offsets
+  and explicit padding.

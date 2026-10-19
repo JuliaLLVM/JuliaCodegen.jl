@@ -95,6 +95,37 @@ end
     end
 end
 
+struct R_PadPair; a::Float32; b::Int128; end
+struct R_Nested; x::R_PadPair; y::Int8; end
+r_padded(p::R_PadPair) = R_Nested(R_PadPair(p.a + 1f0, p.b), Int8(3))
+
+# targets whose data layout aligns a field differently than Julia: SPIR-V's aligns `i128`
+# to 8 bytes, Julia `Int128` to 16
+@testset "layouts on other targets" begin
+    triple = "spirv64-unknown-unknown"
+    datalayout = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-G1-ni:10:11:12:13"
+    config = JC.CodegenConfig(; target=JC.Target(; triple, datalayout), on_unsupported=:error,
+                              on_internal_error=:error)
+    @dispose ctx=Context() begin
+        ls = JC.Layouts(config)
+        dl = ls.datalayout
+        lay = JC.layout(ls, R_PadPair)
+        @test string(lay.llvm) == "<{ float, [12 x i8], i128 }>"
+        @test lay.fieldidx == [0, 2]
+        lay = JC.layout(ls, R_Nested)
+        @test LLVM.abi_size(dl, lay.llvm) == sizeof(R_Nested)
+        @test LLVM.offsetof(dl, lay.llvm, lay.fieldidx[2] + 1) == fieldoffset(R_Nested, 2)
+        # the host's layout needs no padding
+        host = JC.Layouts(JC.CodegenConfig())
+        Sys.ARCH === :x86_64 && @test string(JC.layout(host, R_PadPair).llvm) == "{ float, i128 }"
+    end
+    # code with such values
+    @test @filecheck begin
+        @check "<{ float, [12 x i8], i128 }>"
+        test_module_ir(r_padded, (R_PadPair,); triple, datalayout)
+    end
+end
+
 @testset "layouts" begin
     config = JC.CodegenConfig()
     @dispose ctx=Context() begin

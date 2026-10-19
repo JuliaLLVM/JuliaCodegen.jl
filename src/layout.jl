@@ -151,18 +151,50 @@ function compute_layout(ls::Layouts, @nospecialize T)
     ty = isempty(elements) ? LLVM.StructType(LLVM.LLVMType[]) :
          homogeneous ? LLVM.ArrayType(elements[1], length(elements)) :
          LLVM.StructType(elements)
-    if !isempty(elements)
-        check_size(ls, T, ty)
-        if ty isa LLVM.StructType
-            for i in 1:n
-                idx[i] < 0 && continue
-                LLVM.offsetof(ls.datalayout, ty, idx[i] + 1) == fieldoffset(T, i) ||
-                    unsupported("the layout of ", T, ": the offset of field ", i,
-                                " differs between Julia and LLVM")
-            end
-        end
+    if !isempty(elements) && !same_offsets(ls, T, ty, idx)
+        # the target's data layout aligns a field differently than Julia does (e.g. `i128`
+        # to 8 bytes on targets that don't say otherwise, where Julia aligns `Int128` to
+        # 16): a packed struct with the fields at Julia's offsets, and explicit padding
+        ty, idx = padded_struct(ls, T, idx, elements)
     end
+    isempty(elements) || check_size(ls, T, ty)
     return Layout(ty, idx, storage, Aggregate)
+end
+
+# whether the LLVM aggregate `ty` has the size of `T`, and the fields of `T` (the elements
+# `idx`) at Julia's offsets
+function same_offsets(ls::Layouts, @nospecialize(T), ty::LLVM.LLVMType, idx::Vector{Int})
+    dl = ls.datalayout
+    LLVM.abi_size(dl, ty) == sizeof(T) || return false
+    for i in 1:fieldcount(T)
+        idx[i] < 0 && continue
+        offset = ty isa LLVM.StructType ? LLVM.offsetof(dl, ty, idx[i] + 1) :
+                 idx[i] * LLVM.abi_size(dl, ty.element_type)
+        offset == fieldoffset(T, i) || return false
+    end
+    return true
+end
+
+# a packed struct of the `elements` of the fields of `T` (the elements `idx`) at Julia's
+# offsets, with arrays of bytes as the padding; and the fields' elements in it
+function padded_struct(ls::Layouts, @nospecialize(T), idx::Vector{Int},
+                       elements::Vector{LLVM.LLVMType})
+    dl = ls.datalayout
+    padded = LLVM.LLVMType[]
+    newidx = fill(-1, length(idx))
+    offset = 0
+    for i in sortperm(1:fieldcount(T); by=i -> fieldoffset(T, i))
+        idx[i] < 0 && continue
+        fo = Int(fieldoffset(T, i))
+        fo < offset && unsupported("the layout of ", T, ": overlapping fields on this target")
+        fo > offset && push!(padded, LLVM.ArrayType(LLVM.Int8Type(), fo - offset))
+        newidx[i] = length(padded)
+        el = elements[idx[i] + 1]
+        push!(padded, el)
+        offset = fo + Int(LLVM.abi_size(dl, el))
+    end
+    sizeof(T) > offset && push!(padded, LLVM.ArrayType(LLVM.Int8Type(), sizeof(T) - offset))
+    return LLVM.StructType(padded; packed=true), newidx
 end
 
 function check_size(ls::Layouts, @nospecialize(T), ty::LLVM.LLVMType)
