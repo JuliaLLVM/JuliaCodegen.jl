@@ -77,6 +77,10 @@ JuliaCodegen.declare_function!
 JuliaCodegen.signature_argtypes
 JuliaCodegen.emit_body!
 JuliaCodegen.emit_jlcall_wrapper!
+JuliaCodegen.SpecSig
+JuliaCodegen.specsig_abi
+JuliaCodegen.emit_specsig_wrapper!
+JuliaCodegen.emit_specsig_call!
 JuliaCodegen.literal_global
 JuliaCodegen.literal_objects
 JuliaCodegen.literal_pointer

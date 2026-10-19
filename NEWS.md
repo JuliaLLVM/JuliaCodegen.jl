@@ -46,3 +46,7 @@
   1.12, `jl_handler_t`, `jl_enter_handler` and setjmp from 1.13 on), values flowing into
   catch blocks (PhiC/Upsilon), scopes (`@with`), `:throw_undef_if_not`, assignments and
   reads of non-constant globals, and `new` of types known only at run time.
+- Julia's native specialized calling convention (specsig): the entry of a function in it
+  (`emit_specsig_wrapper!`), declared as native code declares it, and calls of functions
+  in it (`emit_specsig_call!`). Arguments and results with references to objects (split
+  roots) and union results are not handled yet.

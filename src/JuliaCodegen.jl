@@ -38,6 +38,7 @@ include("memory.jl")
 include("cabi.jl")
 include("ccall.jl")
 include("exceptions.jl")
+include("specsig.jl")
 include("ir.jl")
 
 end

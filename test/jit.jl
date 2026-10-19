@@ -30,14 +30,18 @@ end
 const TEST_CACHE = Dict{Any,TestCompiled}()
 const TEST_LOCK = ReentrantLock()
 
-"""
-    test_compile(tt; optimize=true, config=test_config()) -> TestCompiled
+emit_jlcall_entry!(cgm, @nospecialize(tt), name) = JuliaCodegen.emit_entry!(cgm, tt; name)
 
-Compile the call signature `tt` with JuliaCodegen into Julia's JIT. Every module passes
+"""
+    test_compile(tt; optimize=true, config=test_config(), emit=emit_jlcall_entry!) -> TestCompiled
+
+Compile the call signature `tt` with JuliaCodegen into Julia's JIT: `emit(cgm, tt, name)`
+emits the function `name` in the jlcall convention that calls it. Every module passes
 `verify_ir` before Julia's pipeline runs.
 """
-function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config())
-    @lock TEST_LOCK get!(TEST_CACHE, (tt, optimize, config.on_unsupported)) do
+function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config(),
+                      emit=emit_jlcall_entry!)
+    @lock TEST_LOCK get!(TEST_CACHE, (tt, optimize, config.on_unsupported, emit)) do
         jit = test_jit()
         fallbacks = Pair{Core.MethodInstance,Any}[]
         roots = Any[]
@@ -49,7 +53,7 @@ function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config
         tsm() do mod
             try
                 cgm = JuliaCodegen.CGModule(mod, config)
-                JuliaCodegen.emit_entry!(cgm, tt; name)
+                emit(cgm, tt, name)
                 append!(fallbacks, cgm.fallbacks)
                 ir = string(mod)
                 iptr = LLVM.IntType(8 * sizeof(Ptr{Cvoid}))
@@ -96,10 +100,13 @@ function bind_pgcstack_resolver!(mod::LLVM.Module)
     LLVM.erase!(f)
 end
 
-"Call `f(args...)` with code compiled by JuliaCodegen (with the configuration `config`)."
-function cgrun(@nospecialize(f), args...; config=test_config())
+"""
+Call `f(args...)` with code compiled by JuliaCodegen (with the configuration `config`,
+through the entry `emit` emits, see [`test_compile`](@ref)).
+"""
+function cgrun(@nospecialize(f), args...; config=test_config(), emit=emit_jlcall_entry!)
     tt = Tuple{Core.Typeof(f), map(Core.Typeof, args)...}
-    c = test_compile(tt; config)
+    c = test_compile(tt; config, emit)
     argv = Any[args...]
     return GC.@preserve argv c ccall(c.fptr, Any, (Any, Ptr{Any}, UInt32), f, argv, length(argv))
 end
