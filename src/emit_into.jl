@@ -30,8 +30,9 @@ Compile the CodeInstances of `codeinfos`, `(ci, src)` pairs whose source `src` (
   `output.fallbacks`), or throws with `on_unsupported = :error`;
 - functions that always throw are compiled too (no native-code stubs for error paths);
 - every CodeInstance gets an entry in the jlcall convention and, where its signature is
-  handled, one in the specsig convention (with the configuration's `gcstack_arg`); the
-  functions themselves have internal linkage.
+  handled, one in the specsig convention (with the configuration's `gcstack_arg`), named
+  as native code's (`jfptr_f_N` and `julia_f_N`); the functions themselves have internal
+  linkage.
 
 Returns `compiled`, an `IdDict` from each CodeInstance to its
 [`CompiledFunctions`](@ref JuliaCodegen.CompiledFunctions), and the module's
@@ -82,11 +83,14 @@ function emit_sources!(cgm::CGModule, codeinfos, sources)
     process_worklist!(cgm)
     compiled = IdDict{Core.CodeInstance,CompiledFunctions}()
     for (ci, info) in infos
-        name = LLVM.name(info.llvmf)
-        func = emit_jlcall_wrapper!(cgm, info, "jfptr_" * name)
+        # the entries are named as native code's (`julia_f_N` in the specsig convention,
+        # `jfptr_f_N` in the jlcall one); the function they inline is `jlbody_f_N`
+        base = chopprefix(LLVM.name(info.llvmf), "julia_")
+        LLVM.name!(info.llvmf, "jlbody_" * base)
+        func = emit_jlcall_wrapper!(cgm, info, "jfptr_" * base)
         push!(cgm.entries, Entry(info.mi, LLVM.name(func), :jlcall))
         specfunc = try
-            LLVM.name(emit_specsig_wrapper!(cgm, info, "j_" * name))
+            LLVM.name(emit_specsig_wrapper!(cgm, info, "julia_" * base))
         catch err
             err isa Unsupported || rethrow()
             nothing
