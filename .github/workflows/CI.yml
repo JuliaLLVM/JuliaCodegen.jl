@@ -30,6 +30,8 @@ jobs:
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v3
+      # until the LLVM.jl changes JuliaIR.jl uses are released
+      - uses: ./.github/actions/llvm-dev
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
@@ -55,6 +57,7 @@ jobs:
         with:
           version: '1.12'
       - uses: julia-actions/cache@v3
+      - uses: ./.github/actions/llvm-dev
       - name: Install dependencies
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate()'
       - name: Build and deploy

@@ -12,6 +12,14 @@ JuliaCodegen
 JuliaCodegen.CodegenConfig
 ```
 
+## Facts about the running Julia
+
+```@docs
+JuliaCodegen.RuntimeFacts
+JuliaCodegen.runtime_facts
+JuliaCodegen.setjmp_savemask
+```
+
 ## Targets
 
 ```@docs

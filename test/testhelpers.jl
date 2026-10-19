@@ -135,16 +135,16 @@ function has_dialect_verifier()
 end
 
 """
-    verify_ir(mod; julia=VERSION, strong=true, dialect=has_dialect_verifier())
+    verify_ir(mod; strong=true, dialect=has_dialect_verifier())
 
 Verify a module in Julia's pre-lowering IR: LLVM's verifier, then JuliaIR's
-GCInvariantVerifier for the IR dialect of `julia` (throwing a `PassException` wrapping a
-`JuliaIR.GCInvariantError`), and, with `dialect`, the Julia dialect's verifier.
+GCInvariantVerifier (throwing a `PassException` wrapping a `JuliaIR.GCInvariantError`),
+and, with `dialect`, the Julia dialect's verifier.
 """
-function verify_ir(mod::LLVM.Module; julia::VersionNumber=VERSION, strong::Bool=true,
+function verify_ir(mod::LLVM.Module; strong::Bool=true,
                    dialect::Bool=has_dialect_verifier())
     LLVM.verify(mod)
-    run!(JuliaIR.GCInvariantVerifierPass(; julia, strong), mod)
+    run!(JuliaIR.GCInvariantVerifierPass(; strong), mod)
     dialect && LLVM.Interop.verify_dialect(mod)
     return mod
 end
