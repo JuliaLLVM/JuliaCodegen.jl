@@ -20,6 +20,23 @@ JuliaCodegen.runtime_facts
 JuliaCodegen.setjmp_savemask
 ```
 
+## Julia's IR
+
+```@docs
+JuliaCodegen.declare_op
+JuliaCodegen.call_op!
+JuliaCodegen.write_barrier!
+JuliaCodegen.OpSpec
+JuliaCodegen.get_pgcstack!
+JuliaCodegen.current_task!
+JuliaCodegen.current_ptls!
+JuliaCodegen.safepoint_poll!
+JuliaCodegen.TBAA
+JuliaCodegen.tbaa_tree
+JuliaCodegen.tbaa_tag
+JuliaCodegen.tbaa!
+```
+
 ## Targets
 
 ```@docs

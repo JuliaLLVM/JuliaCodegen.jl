@@ -15,5 +15,8 @@ include("errors.jl")
 include("target.jl")
 include("facts.jl")
 include("config.jl")
+include("tbaa.jl")
+include("ops.jl")
+include("prologue.jl")
 
 end

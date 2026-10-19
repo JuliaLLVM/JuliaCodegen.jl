@@ -9,3 +9,6 @@
   policies for unsupported code and internal errors.
 - The IR dialect (`JuliaIR.Dialect`) and runtime facts (`RuntimeFacts`) of the running
   Julia, from JuliaIR.jl.
+- The intrinsics of Julia's IR (`declare_op`, `call_op!`, `write_barrier!`), the
+  function prologue (pgcstack, current task, thread-local state, safepoint poll) and the
+  TBAA tree, as the running Julia's code generator emits them.
