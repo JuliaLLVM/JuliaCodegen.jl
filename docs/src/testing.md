@@ -39,6 +39,13 @@ and runtime facts) are compared with the IR of Julia's own code generator:
 `test/factprobe.jl` recovers them from native IR and from object headers, independently
 of JuliaIR.jl. `julia test/factprobe.jl` prints them.
 
+## Native code
+
+`test/nativeprobe.jl` has functions whose native code uses every intrinsic of Julia's IR
+that JuliaCodegen emits. The tests compare JuliaCodegen's declarations of the intrinsics
+(types and attributes), the function prologue and the TBAA tree with those of the
+running Julia's code generator.
+
 ## Unreleased dependencies
 
 JuliaIR.jl and the LLVM.jl changes it needs are not released yet: `Project.toml` and
