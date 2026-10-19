@@ -44,6 +44,12 @@ b_dynamic_index(t, i) = t[i]
 b_dynamic_inbounds(t, i) = @inbounds t[i]
 b_dynamic_const(i) = @inbounds (1.0f0, 2.0f0, 3.0f0, 4.0f0)[i]
 b_dynamic_field(m, i) = getfield(m, i)
+b_div(x, y) = div(x, y)
+b_memoryref(m, i) = Core.memoryrefnew(Core.memoryrefnew(m), i, true)
+function b_undefvar(c)
+    c && (x = 1)
+    return x
+end
 
 const B_EGAL_PAIRS = Any[
     (1, 1), (1, 2), (1, 1.0), (NaN, NaN), (0.0, -0.0), (1.0f0, 1.0f0), (true, true), (true, false),
@@ -127,6 +133,10 @@ end
     @cgtest b_dynamic_field(BMutable(1, "a", BRef(2, "b")), 2)
     @cgtest b_dynamic_field(BPartial(3), 2)        # UndefRefError
     @cgtest b_dynamic_field(BPartial(3), 3)        # BoundsError
+    @cgtest b_memoryref(Memory{Int}(1:3), 4)       # BoundsError
+    @cgtest b_div(1, 0)                            # DivideError
+    @cgtest b_undefvar(true)
+    @cgtest b_undefvar(false)                      # UndefVarError
     # the write barrier: young objects stored into an old one survive collections
     old = BMutable(0, nothing, BRef(0, ""))
     GC.gc(); GC.gc()
@@ -201,6 +211,20 @@ end
         @check "@_j_const{{.*}} = private unnamed_addr constant [4 x float]"
         @check "load float, ptr"
         print(test_ir(b_dynamic_const, (Int,)))
+    end
+    # error paths throw through the runtime, as native code's (which GPU back ends lower),
+    # rather than construct their exceptions
+    for (f, types, callee) in ((b_dynamic_index, (NTuple{4,Float32}, Int), "@ijl_bounds_error_unboxed_int("),
+                               (b_dynamic_index, (Tuple{String,Symbol}, Int), "@ijl_bounds_error_int("),
+                               (b_memoryref, (Memory{Int}, Int), "@ijl_bounds_error_int("),
+                               (b_partial_get, (BPartial,), "@ijl_throw("),
+                               (b_div, (Int, Int), "@ijl_throw("),
+                               (b_undefvar, (Bool,), "@ijl_undefined_var_error("))
+        @test @filecheck begin
+            @check_not "julia.call"
+            @check "call void $callee"
+            print(test_ir(f, types))
+        end
     end
     # the box of an object is compared by the runtime only if it isn't identical
     @test @filecheck begin

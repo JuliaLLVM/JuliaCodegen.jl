@@ -31,6 +31,10 @@ end
 
 derived(fc::FnCtx, v::LLVM.Value) = LLVM.addrspacecast!(fc.builder, v, T_derived())
 
+# a tracked pointer passed to a function that roots it (`mark_callee_rooted`)
+callee_rooted(fc::FnCtx, v::LLVM.Value) =
+    LLVM.addrspacecast!(fc.builder, v, LLVM.PointerType(AddrSpace.CalleeRooted))
+
 """
     JuliaCodegen.emit_allocation(fc, T) -> LLVM.Value
 

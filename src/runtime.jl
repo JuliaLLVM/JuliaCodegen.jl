@@ -3,12 +3,13 @@
 # an image, binds them.
 
 """
-    JuliaCodegen.declare_runtime(mod, dialect, name) -> LLVM.Function
+    JuliaCodegen.declare_runtime(mod, dialect, name; T_size) -> LLVM.Function
 
 The declaration of the runtime function `name` (e.g. `:jl_apply_generic`) in `mod`, as the
-dialect's code generator declares it.
+dialect's code generator declares it, with `T_size` the target's `size_t`.
 """
-function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbol)
+function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbol;
+                         T_size::LLVM.IntegerType=LLVM.Int64Type())
     sym = runtime_symbol(name)
     haskey(mod.functions, sym) && return mod.functions[sym]
     T_rooted = LLVM.PointerType(AddrSpace.CalleeRooted)
@@ -67,6 +68,14 @@ function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbo
     elseif name === :jl_throw
         f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_rooted]))
         push!(f.function_attributes, LLVM.EnumAttribute("noreturn"))
+    elseif name === :jl_bounds_error_int
+        # `void (jl_value_t *v, size_t i)`
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_rooted, T_size]))
+        push!(f.function_attributes, LLVM.EnumAttribute("noreturn"))
+    elseif name === :jl_bounds_error_unboxed_int
+        # `void (void *data, jl_value_t *vt, size_t i)`
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_derived(), T_ptr(), T_size]))
+        push!(f.function_attributes, LLVM.EnumAttribute("noreturn"))
     elseif name === :jl_subtype
         f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.Int32Type(), [T_tracked(), T_tracked()]))
     elseif name === :jl_egal__unboxed
@@ -105,4 +114,5 @@ runtime_symbol(name::Symbol) =
     startswith(String(name), "jl_") && !(name in INTERNAL_RUNTIME) ? "i" * String(name) : String(name)
 
 "The address of the runtime function `name` as an LLVM value."
-runtime_function(fc::FnCtx, name::Symbol) = declare_runtime(fc.cgm.mod, dialect(fc), name)
+runtime_function(fc::FnCtx, name::Symbol) =
+    declare_runtime(fc.cgm.mod, dialect(fc), name; T_size=iptr_type(fc))

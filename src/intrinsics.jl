@@ -75,9 +75,8 @@ function emit_typecheck!(fc::FnCtx, x::CGVal, @nospecialize(T), context::String)
     b = fc.builder
     function type_error()
         err = declare_runtime(fc.cgm.mod, dialect(fc), :jl_type_error)
-        rooted(v) = LLVM.addrspacecast!(b, v, LLVM.PointerType(AddrSpace.CalleeRooted))
         LLVM.call!(b, LLVM.function_type(err), err,
-                   LLVM.Value[cstring!(fc.cgm, context), literal_pointer(fc, T), rooted(emit_box(fc, x))])
+                   LLVM.Value[cstring!(fc.cgm, context), literal_pointer(fc, T), callee_rooted(fc, emit_box(fc, x))])
         LLVM.unreachable!(b)
     end
     if typeintersect(x.typ, T) === Union{}
@@ -354,7 +353,7 @@ function emit_checked_divrem(fc::FnCtx, name::Symbol, xs::Vector{LLVM.Value}, @n
         ismin = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, x, tmin)
         ok = LLVM.and!(b, ok, LLVM.not!(b, LLVM.and!(b, isneg1, ismin)))
     end
-    emit_guard!(fc, ok, throw_divide_error)
+    emit_raise_unless!(fc, ok, DivideError())
     r = if name === :checked_sdiv_int
         LLVM.sdiv!(b, x, y)
     elseif name === :checked_udiv_int

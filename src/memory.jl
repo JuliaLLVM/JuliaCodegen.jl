@@ -37,7 +37,6 @@ memory_elsize(@nospecialize R) =
     Int(unsafe_load(Ptr{Base.DataTypeLayout}(
         GenericMemory{R.parameters[1], R.parameters[2], R.parameters[3]}.layout)).size)
 
-@noinline throw_boundserror(a, i) = throw(BoundsError(a, i))
 
 memory_length(fc::FnCtx, mem::LLVM.Value) =
     tbaa!(fc, LLVM.load!(fc.builder, iptr_type(fc), derived(fc, mem); align=config(fc).target.pointer_size),
@@ -67,13 +66,41 @@ function memory_owner(fc::FnCtx, mem::LLVM.Value)
 end
 
 # a bounds check of the 0-based index `i0` against the length `len`, unless the
-# boundscheck argument `bc` is false
-function bounds_check!(fc::FnCtx, i0::LLVM.Value, len::LLVM.Value, bc::CGVal, x::CGVal, idx::CGVal)
+# boundscheck argument `bc` is false: out of bounds, the runtime throws the BoundsError of
+# `x` and the index `idx` (`emit_bounds_check`), of `x` boxed (`jl_bounds_error_int`), or
+# with `unboxed`, of an inline `x` without references by its data
+# (`jl_bounds_error_unboxed_int`)
+function bounds_check!(fc::FnCtx, i0::LLVM.Value, len::LLVM.Value, bc::CGVal, x::CGVal, idx::CGVal;
+                       unboxed::Bool=false)
     (isconstant(bc) && constant_value(bc) === false) && return
     b = fc.builder
     inb = LLVM.icmp!(b, LLVM.API.LLVMIntULT, i0, len)
     isconstant(bc) || (inb = LLVM.or!(b, inb, LLVM.not!(b, LLVM.trunc!(b, bc.V, LLVM.Int1Type()))))
-    emit_guard!(fc, inb, throw_boundserror, x, idx)
+    fail = LLVM.BasicBlock(current_function(fc), "oob")
+    pass = LLVM.BasicBlock(current_function(fc), "idxend")
+    LLVM.br!(b, inb, pass, fail)
+    LLVM.position!(b, LLVM.at_end(fail))
+    # (a value with references boxed, so that they are rooted while the runtime allocates)
+    if unboxed && x.kind !== Boxed && !has_references(x.typ)
+        data = if x.kind === Ghost
+            LLVM.null(T_derived())
+        elseif x.mem !== nothing
+            derived(fc, x.mem)
+        else
+            # (on the error path)
+            slot = LLVM.alloca!(b, LLVM.value_type(x.V))
+            LLVM.store!(b, x.V, slot)
+            derived(fc, slot)
+        end
+        f = runtime_function(fc, :jl_bounds_error_unboxed_int)
+        LLVM.call!(b, LLVM.function_type(f), f, LLVM.Value[data, literal_pointer_raw(fc, x.typ), idx.V])
+    else
+        f = runtime_function(fc, :jl_bounds_error_int)
+        LLVM.call!(b, LLVM.function_type(f), f, LLVM.Value[callee_rooted(fc, emit_box(fc, x)), idx.V])
+    end
+    LLVM.unreachable!(b)
+    LLVM.position!(b, LLVM.at_end(pass))
+    return
 end
 
 function emit_memoryrefnew(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))

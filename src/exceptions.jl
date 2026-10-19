@@ -200,8 +200,6 @@ end
 
 ## statements that throw, and assignments of globals
 
-@noinline throw_undefvar(@nospecialize(s)) = ccall(:jl_undefined_var_error, Union{}, (Any, Any), s, :local)
-
 function emit_exception_head!(fc::FnCtx, idx::Int, ex::Expr, @nospecialize(typ))
     head = ex.head
     if head === :leave
@@ -220,10 +218,21 @@ function emit_exception_head!(fc::FnCtx, idx::Int, ex::Expr, @nospecialize(typ))
         ok = LLVM.trunc!(fc.builder, c.V, LLVM.Int1Type())
         var = ex.args[1]
         if var === :getfield_undefref || var === Symbol("##getfield##")
-            emit_guard!(fc, ok, throw_undefref)
+            emit_raise_unless!(fc, ok, UndefRefError())
         else
-            # (a Symbol, or a GlobalRef in a module context; passed to UndefVarError as is)
-            emit_guard!(fc, ok, throw_undefvar, const_value(fc, var))
+            # the runtime's UndefVarError of the local variable (`undef_var_error_ifnot`; a
+            # Symbol, or a GlobalRef in a module context, passed to UndefVarError as is)
+            b = fc.builder
+            fail = LLVM.BasicBlock(current_function(fc), "err")
+            pass = LLVM.BasicBlock(current_function(fc), "ok")
+            LLVM.br!(b, ok, pass, fail)
+            LLVM.position!(b, LLVM.at_end(fail))
+            f = runtime_function(fc, :jl_undefined_var_error)
+            LLVM.call!(b, LLVM.function_type(f), f,
+                       LLVM.Value[callee_rooted(fc, literal_pointer(fc, var)),
+                                  callee_rooted(fc, literal_pointer(fc, :local))])
+            LLVM.unreachable!(b)
+            LLVM.position!(b, LLVM.at_end(pass))
         end
         return ghost(Nothing, nothing)
     elseif head === :(=)

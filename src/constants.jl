@@ -71,6 +71,16 @@ function literal_pointer(fc::FnCtx, @nospecialize x)
     end
 end
 
+# an untracked pointer to the object `x` (native code's `literal_pointer_val`), for the
+# runtime functions that take one, loaded where it is used
+function literal_pointer_raw(fc::FnCtx, @nospecialize x)
+    p = LLVM.load!(fc.builder, T_ptr(), literal_global(fc.cgm, x); align=config(fc).target.pointer_size)
+    tbaa!(fc, p, :const)
+    p.metadata[LLVM.MD_invariant_load] = LLVM.MDNode(LLVM.Metadata[])
+    p.metadata[LLVM.MD_nonnull] = LLVM.MDNode(LLVM.Metadata[])
+    return p
+end
+
 # where loads of objects go: the start of the entry block, which dominates every use
 function top_insertion_point(fc::FnCtx)
     insts = LLVM.instructions(fc.top)

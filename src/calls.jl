@@ -54,8 +54,26 @@ function emit_guard!(fc::FnCtx, cond::LLVM.Value, f::Function, args::CGVal...)
     return nothing
 end
 
+"""
+    JuliaCodegen.emit_raise_unless!(fc, cond, exc)
+
+If `cond` (an `i1`) is false, throw the exception object `exc` through the runtime
+(`jl_throw`), as native code's `raise_exception_unless`.
+"""
+function emit_raise_unless!(fc::FnCtx, cond::LLVM.Value, @nospecialize(exc))
+    b = fc.builder
+    fail = LLVM.BasicBlock(current_function(fc), "fail")
+    pass = LLVM.BasicBlock(current_function(fc), "pass")
+    LLVM.br!(b, cond, pass, fail)
+    LLVM.position!(b, LLVM.at_end(fail))
+    f = runtime_function(fc, :jl_throw)
+    LLVM.call!(b, LLVM.function_type(f), f, LLVM.Value[callee_rooted(fc, literal_pointer(fc, exc))])
+    LLVM.unreachable!(b)
+    LLVM.position!(b, LLVM.at_end(pass))
+    return nothing
+end
+
 # error paths, which construct the exceptions in Julia
-@noinline throw_divide_error() = throw(DivideError())
 @noinline throw_error_message(msg::String) = throw(ErrorException(msg))
 
 ## walker hooks

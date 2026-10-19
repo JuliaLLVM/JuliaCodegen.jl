@@ -381,10 +381,8 @@ function field_index(@nospecialize(T), f::CGVal)
     return nothing
 end
 
-@noinline throw_undefref() = throw(UndefRefError())
-
-# a null check of a reference that is undefined when null: UndefRefError
-undef_check!(fc::FnCtx, p::LLVM.Value) = emit_guard!(fc, nonnull(fc, p), throw_undefref)
+# a null check of a reference that is undefined when null: the runtime's UndefRefError
+undef_check!(fc::FnCtx, p::LLVM.Value) = emit_raise_unless!(fc, nonnull(fc, p), UndefRefError())
 
 # `getfield(x, f, [order], [boundscheck])`
 function emit_getfield(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
@@ -476,10 +474,13 @@ function emit_getfield_unknownidx(fc::FnCtx, x::CGVal, @nospecialize(T), idx::CG
         lowered = fc -> convert_repr(fc, ghost(FT, something(ghost_value(FT))), rt)
     elseif x.kind === Inline
         lay = layout(fc, T)
-        (same && (lay.llvm isa LLVM.ArrayType || lay.llvm isa LLVM.VectorType)) || return nothing
+        (lay.llvm isa LLVM.ArrayType || lay.llvm isa LLVM.VectorType) || return nothing
+        # (references, of any types, or values of a single type)
+        refs = all(i -> field_storage(T, i) === FieldPointer, 1:n)
+        (refs || same) || return nothing
         lowered = fc -> begin
-            v = inline_element(fc, x, lay, FT, n, idx)
-            convert_repr(fc, field_storage(FT) === FieldPointer ? boxed(FT, v) : inline(FT, v), rt)
+            v = inline_element(fc, x, lay, refs, n, idx; align=Base.datatype_alignment(FT))
+            convert_repr(fc, refs ? boxed(Union{types...}, v) : inline(FT, v), rt)
         end
     elseif x.kind === Boxed
         ismutabletype(T) && T.name.atomicfields != C_NULL && return nothing
@@ -506,21 +507,23 @@ function emit_getfield_unknownidx(fc::FnCtx, x::CGVal, @nospecialize(T), idx::CG
     else
         return nothing
     end
-    bounds_check!(fc, LLVM.sub!(b, idx.V, iptr(fc, 1)), iptr(fc, n), bc, x, idx)
+    bounds_check!(fc, LLVM.sub!(b, idx.V, iptr(fc, 1)), iptr(fc, n), bc, x, idx; unboxed=true)
     return lowered(fc)
 end
 
-# the element `idx` (1-based, in bounds) of the inline homogeneous tuple `x` with the
-# layout `lay` (an LLVM array or vector of `n` elements of type `FT`, or of references to
-# them): extracted from a vector, selected among a few elements or ones with references,
-# or loaded from memory (the memory it was loaded from; for a constant, a private global,
-# as native code's `value_to_pointer`; or a stack slot)
-function inline_element(fc::FnCtx, x::CGVal, lay::Layout, @nospecialize(FT), n::Int, idx::CGVal)
+# the element `idx` (1-based, in bounds) of the inline tuple `x` with the layout `lay` (an
+# LLVM array or vector of `n` elements, references if `refs`, aligned to `align`):
+# extracted from a vector, selected among references or a few values not in memory, or
+# loaded from memory (the memory it was loaded from; for a constant, a private global, as
+# native code's `value_to_pointer`; or a stack slot)
+function inline_element(fc::FnCtx, x::CGVal, lay::Layout, refs::Bool, n::Int, idx::CGVal;
+                        align::Integer)
     b = fc.builder
     i0 = LLVM.sub!(b, idx.V, iptr(fc, 1))
     if lay.llvm isa LLVM.VectorType
         return LLVM.extract_element!(b, x.V, LLVM.trunc!(b, i0, LLVM.Int32Type()))
-    elseif n <= 3 || field_storage(FT) === FieldPointer || has_references(FT)
+    elseif refs || has_references(x.typ) ||
+           (n <= 3 && x.mem === nothing && !(isconstant(x) && x.V isa LLVM.Constant))
         v = LLVM.extract_value!(b, x.V, 0)
         for i in 1:n-1
             c = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, i0, iptr(fc, i))
@@ -528,18 +531,17 @@ function inline_element(fc::FnCtx, x::CGVal, lay::Layout, @nospecialize(FT), n::
         end
         return v
     end
-    align = Base.datatype_alignment(x.typ)
     if x.mem !== nothing
         mem, tb = x.mem, :const
     elseif isconstant(x) && x.V isa LLVM.Constant
-        mem, tb = constant_memory!(fc.cgm, x.V, align), :const
+        mem, tb = constant_memory!(fc.cgm, x.V, Base.datatype_alignment(x.typ)), :const
     else
-        mem, tb = entry_alloca!(fc, lay.llvm; align), :stack
+        mem, tb = entry_alloca!(fc, lay.llvm; align=Base.datatype_alignment(x.typ)), :stack
         tbaa!(fc, LLVM.store!(b, x.V, mem), :stack)
     end
     et = LLVM.element_type(lay.llvm)
     p = LLVM.inbounds_gep!(b, et, mem, [i0])
-    return tbaa!(fc, LLVM.load!(b, et, p; align=Base.datatype_alignment(FT)), tb)
+    return tbaa!(fc, LLVM.load!(b, et, p; align), tb)
 end
 
 # `setfield!(x, f, v, [order])` of a non-atomic field
@@ -626,7 +628,7 @@ function emit_throw(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     length(args) == 1 || return nothing
     b = fc.builder
     f = runtime_function(fc, :jl_throw)
-    p = LLVM.addrspacecast!(b, emit_box(fc, args[1]), LLVM.PointerType(AddrSpace.CalleeRooted))
+    p = callee_rooted(fc, emit_box(fc, args[1]))
     LLVM.call!(b, LLVM.function_type(f), f, LLVM.Value[p])
     return emit_unreachable!(fc)
 end
