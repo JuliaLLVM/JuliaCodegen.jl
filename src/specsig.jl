@@ -178,6 +178,7 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
             LLVM.ret!(b, r)
         end
     end
+    push!(cgm.entries, Entry(info.mi, LLVM.name(f), :specsig))
     return f
 end
 

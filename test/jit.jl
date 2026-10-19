@@ -1,8 +1,7 @@
-# A minimal JIT for the tests: compile a call signature with JuliaCodegen, give the
-# globals of the objects the code refers to their addresses, run Julia's pipeline, and
-# add the module to Julia's JIT through LLVM.jl. The drivers of the package come later.
-
-using LLVM.Interop: JuliaPipeline
+# A minimal JIT for the tests: compile a call signature with JuliaCodegen, check that the
+# module is relocatable, give the globals of the objects the code refers to their
+# addresses, run Julia's pipeline, and add the module to Julia's JIT through LLVM.jl. The
+# drivers of the package come later.
 
 const TEST_CONFIG = Ref{Any}(nothing)
 function test_config()
@@ -33,14 +32,15 @@ const TEST_LOCK = ReentrantLock()
 emit_jlcall_entry!(cgm, @nospecialize(tt), name) = JuliaCodegen.emit_entry!(cgm, tt; name)
 
 """
-    test_compile(tt; optimize=true, config=test_config(), emit=emit_jlcall_entry!) -> TestCompiled
+    test_compile(tt; optimize=true, config=test_config(), emit=emit_jlcall_entry!, relocatable=true) -> TestCompiled
 
 Compile the call signature `tt` with JuliaCodegen into Julia's JIT: `emit(cgm, tt, name)`
 emits the function `name` in the jlcall convention that calls it. Every module passes
-`verify_ir` before Julia's pipeline runs.
+`verify_ir` before Julia's pipeline runs, and is relocatable (`check_relocatable`) unless
+`relocatable=false`.
 """
 function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config(),
-                      emit=emit_jlcall_entry!)
+                      emit=emit_jlcall_entry!, relocatable::Bool=true)
     @lock TEST_LOCK get!(TEST_CACHE, (tt, optimize, config.on_unsupported, emit)) do
         jit = test_jit()
         fallbacks = Pair{Core.MethodInstance,Any}[]
@@ -54,10 +54,13 @@ function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config
             try
                 cgm = JuliaCodegen.CGModule(mod, config)
                 emit(cgm, tt, name)
-                append!(fallbacks, cgm.fallbacks)
+                out = JuliaCodegen.codegen_output(cgm)
+                append!(fallbacks, out.fallbacks)
                 ir = string(mod)
+                problems = JuliaCodegen.check_relocatable(mod, config)
+                relocatable && !isempty(problems) && error("the module for $tt is not relocatable: ", join(problems, "; "))
                 iptr = LLVM.IntType(8 * sizeof(Ptr{Cvoid}))
-                for (gvname, x) in JuliaCodegen.literal_objects(cgm)
+                for (gvname, x) in out.literals
                     box = Ref{Any}(x)
                     push!(roots, box)
                     addr = ccall(:jl_value_ptr, Ptr{Cvoid}, (Any,), box[])
@@ -68,9 +71,8 @@ function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config
                     LLVM.linkage!(gv, LLVM.API.LLVMPrivateLinkage)
                 end
                 verify_ir(mod)
-                JuliaCodegen.target_machine(config.target) do tm
-                    LLVM.run!(JuliaPipeline(; opt_level=optimize ? 2 : 0), mod, tm)
-                end
+                JuliaCodegen.run_pipeline!(JuliaCodegen.JuliaCppPipeline(; opt_level=optimize ? 2 : 0),
+                                           mod, config)
                 bind_pgcstack_resolver!(mod)
             catch e
                 # (LLVM.jl wraps exceptions thrown in this callback)
@@ -104,9 +106,10 @@ end
 Call `f(args...)` with code compiled by JuliaCodegen (with the configuration `config`,
 through the entry `emit` emits, see [`test_compile`](@ref)).
 """
-function cgrun(@nospecialize(f), args...; config=test_config(), emit=emit_jlcall_entry!)
+function cgrun(@nospecialize(f), args...; config=test_config(), emit=emit_jlcall_entry!,
+               relocatable::Bool=true)
     tt = Tuple{Core.Typeof(f), map(Core.Typeof, args)...}
-    c = test_compile(tt; config, emit)
+    c = test_compile(tt; config, emit, relocatable)
     argv = Any[args...]
     return GC.@preserve argv c ccall(c.fptr, Any, (Any, Ptr{Any}, UInt32), f, argv, length(argv))
 end

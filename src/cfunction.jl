@@ -221,15 +221,16 @@ function emit_cfunction_call!(wc::FnCtx, @nospecialize(sigt), @nospecialize(decl
     # in, the last code instance (and where it is kept), the entry for dynamic dispatch
     # (made by the runtime), the result and signature types, and the flags (specsig)
     null = LLVM.null(P)
+    zero = LLVM.ConstantInt(T_size, 0)
     tail = LLVM.Constant[null, null, null, literal_global(cgm, declrt), literal_global(cgm, sigt),
-                         LLVM.const_inttoptr(LLVM.ConstantInt(T_size, spec === nothing ? 0 : 1), P)]
-    data_fields = facts.cfunction_cache === :cfuncdata ? LLVM.Constant[null, null, tail...] : tail
-    data_type = LLVM.ArrayType(P, length(data_fields))
+                         LLVM.ConstantInt(T_size, spec === nothing ? 0 : 1)]
+    data_fields = facts.cfunction_cache === :cfuncdata ? LLVM.Constant[null, zero, tail...] : tail
+    data_type = LLVM.StructType(LLVM.LLVMType[LLVM.value_type(c) for c in data_fields])
     # (the runtime's facts are the host's)
     length(data_fields) * sizeof(Ptr{Cvoid}) == facts.cfuncdata_size ||
         unsupported("a @cfunction: the call-site data of the runtime has ", facts.cfuncdata_size, " bytes")
     data = LLVM.GlobalVariable(cgm.mod, data_type, unique_name(cgm, "jlcfuncdata"))
-    LLVM.initializer!(data, LLVM.ConstantArray(P, data_fields))
+    LLVM.initializer!(data, LLVM.ConstantStruct(data_type, data_fields))
     LLVM.linkage!(data, LLVM.API.LLVMPrivateLinkage)
     if facts.cfunction_cache === :cfuncdata
         fptr_slot = data

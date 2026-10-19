@@ -35,5 +35,7 @@ function emit_entry!(cgm::CGModule, @nospecialize(tt::Type); name::AbstractStrin
     info = declare_function!(cgm, mi, signature_argtypes(mi), rt)
     push!(cgm.worklist, (info, ir))
     process_worklist!(cgm; strict=mi)
-    return info, emit_jlcall_wrapper!(cgm, info, name)
+    f = emit_jlcall_wrapper!(cgm, info, name)
+    push!(cgm.entries, Entry(mi, LLVM.name(f), :jlcall))
+    return info, f
 end

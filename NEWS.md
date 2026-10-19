@@ -55,3 +55,8 @@
   the runtime resolves and caches at the call site (`jl_get_abi_converter`), in the
   specsig convention or, for results it doesn't handle, the jlcall convention. Closures
   (`$f`) are not handled yet.
+- `codegen_output`: a module's entry points (`Entry`, jlcall or specsig), the objects
+  and external symbols it refers to, and its fallbacks; `check_relocatable`, which reports
+  the addresses a module embeds (the tests check every module); deterministic names and
+  object order; and the pass pipelines (`JuliaCppPipeline`, `NoPipeline`,
+  `CustomPipeline`, `run_pipeline!`).
