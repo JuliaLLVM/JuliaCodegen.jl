@@ -91,6 +91,7 @@ function emit_isa(fc::FnCtx, x::CGVal, @nospecialize(T))
     b = fc.builder
     x.typ <: T && return i1(true)
     typeintersect(x.typ, T) === Union{} && return i1(false)
+    x.kind === UnionVal && return union_isa(fc, x, T)
     x.kind === Boxed || return nothing
     if T isa DataType && isconcretetype(T)
         return LLVM.icmp!(b, LLVM.API.LLVMIntEQ, emit_tag(fc, x.V), tag_constant(fc, T))
@@ -113,6 +114,19 @@ end
 
 "Whether field `i` of `T` may be left undefined by a constructor (`new` with fewer values)."
 maybe_undef_field(@nospecialize(T), i::Int) = i > fieldcount(T) - T.name.n_uninitialized
+
+# the selector byte of an isbits-union field follows its payload
+union_selector_address(fc::FnCtx, addr::LLVM.Value, @nospecialize(FT)) =
+    LLVM.inbounds_gep!(fc.builder, LLVM.Int8Type(), addr, [iptr(fc, union_payload_size(FT))])
+
+# the value of the isbits-union field at `addr`
+function load_union_field(fc::FnCtx, addr::LLVM.Value, @nospecialize(T), @nospecialize(FT))
+    b = fc.builder
+    tb = field_tbaa(fc, T)
+    payload = tbaa!(fc, LLVM.load!(b, LLVM.ArrayType(LLVM.Int8Type(), union_payload_size(FT)), addr; align=1), tb)
+    sel = tbaa!(fc, LLVM.load!(b, LLVM.Int8Type(), union_selector_address(fc, addr, FT)), tb)
+    return make_union(fc, FT, payload, LLVM.add!(b, sel, i8(1)))
+end
 
 "The address of field `i` of the object `obj` of type `T` (a derived pointer)."
 field_address(fc::FnCtx, obj::LLVM.Value, @nospecialize(T), i::Int) =
@@ -168,10 +182,17 @@ function emit_store_field!(fc::FnCtx, obj::LLVM.Value, @nospecialize(T), i::Int,
     FT = fieldtype(T, i)
     s = field_storage(T, i)
     s === FieldGhost && return true
-    s in (FieldUnion, FieldBlob) && return false
+    s === FieldBlob && return false
     addr = field_address(fc, obj, T, i)
     b = fc.builder
-    if s === FieldInline
+    if s === FieldUnion
+        # the payload, then the selector byte after it (the type index - 1); isbits
+        # unions have no references
+        val = convert_repr(fc, v, FT)
+        tbaa!(fc, LLVM.store!(b, union_payload_value(fc, val), addr; align=1), field_tbaa(fc, T))
+        sel = LLVM.sub!(b, union_tindex_value(fc, val), i8(1))
+        tbaa!(fc, LLVM.store!(b, sel, union_selector_address(fc, addr, FT)), field_tbaa(fc, T))
+    elseif s === FieldInline
         val = convert_repr(fc, v, FT)
         store_field!(fc, addr, val.V, T, FT)
         if barrier && has_references(FT)
@@ -216,7 +237,7 @@ function emit_new(fc::FnCtx, @nospecialize(T), args::Vector{CGVal})
     (isprimitivetype(T) || T <: GenericMemory || T === String) && return nothing
     n = fieldcount(T)
     length(args) <= n || return nothing
-    any(i -> field_storage(T, i) in (FieldUnion, FieldBlob), 1:n) && return nothing
+    any(i -> field_storage(T, i) === FieldBlob, 1:n) && return nothing
     n > 0 && fieldoffset(T, 1) > 0 && return nothing    # the lock of large atomic fields
     # box the field values first: an allocation between the object's and its stores
     # would let the GC scan its uninitialized reference fields
@@ -231,6 +252,11 @@ function emit_new(fc::FnCtx, @nospecialize(T), args::Vector{CGVal})
             emit_store_field!(fc, obj, T, i, args[i]; barrier=false) || return nothing
         elseif s === FieldPointer
             store_field!(fc, field_address(fc, obj, T, i), LLVM.null(T_tracked()), T, fieldtype(T, i))
+        elseif s === FieldUnion
+            # an undefined isbits-union field has selector 0
+            FT = fieldtype(T, i)
+            tbaa!(fc, LLVM.store!(fc.builder, i8(0), union_selector_address(fc, field_address(fc, obj, T, i), FT)),
+                  field_tbaa(fc, T))
         elseif has_references(fieldtype(T, i))
             # the references of an undefined inline field are null
             FT = fieldtype(T, i)
@@ -307,8 +333,9 @@ function emit_getfield(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     elseif x.kind === Boxed
         s = field_storage(T, i)
         s === FieldGhost && return convert_repr(fc, ghost(FT, something(ghost_value(FT))), rt)
-        s in (FieldUnion, FieldBlob) && return nothing
+        s === FieldBlob && return nothing
         addr = field_address(fc, x.V, T, i)
+        s === FieldUnion && return convert_repr(fc, load_union_field(fc, addr, T, FT), rt)
         tb = field_tbaa(fc, T)
         if s === FieldInline
             if maybe_undef_field(T, i) && has_references(FT)
@@ -363,7 +390,7 @@ function emit_ifelse(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     (length(args) == 3 && args[1].typ === Bool && args[1].kind === Inline) || return nothing
     k = repr_kind(rt)
     k === Ghost && return ghost(rt, something(ghost_value(rt)))
-    k in (Inline, Boxed) || return nothing
+    k in (Inline, Boxed, UnionVal) || return nothing
     x, y = convert_repr(fc, args[2], rt), convert_repr(fc, args[3], rt)
     c = LLVM.trunc!(fc.builder, args[1].V, LLVM.Int1Type())
     return CGVal(rt, k, LLVM.select!(fc.builder, c, x.V, y.V), nothing, nothing)
@@ -373,6 +400,8 @@ function emit_typeof(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     length(args) == 1 || return nothing
     T = args[1].typ
     isconcretetype(T) && !iskind(T) && return const_value(fc, T)
+    args[1].kind === UnionVal &&
+        return convert_repr(fc, boxed(DataType, union_typeof(fc, args[1])), rt)
     args[1].kind === Boxed || return nothing
     return convert_repr(fc, boxed(DataType, typeof_box(fc, args[1].V)), rt)
 end

@@ -140,6 +140,18 @@ JuliaCodegen.maybe_undef_field
 JuliaCodegen.runtime_global
 ```
 
+## Unboxed unions
+
+```@docs
+JuliaCodegen.make_union
+JuliaCodegen.union_tindex_value
+JuliaCodegen.union_member
+JuliaCodegen.tindex_switch
+JuliaCodegen.box_union
+JuliaCodegen.to_union
+JuliaCodegen.from_union
+```
+
 ## Targets
 
 ```@docs

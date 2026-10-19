@@ -122,9 +122,23 @@ function emit_goto!(fc::FnCtx, target::Int)
     LLVM.br!(fc.builder, fc.blocks[target])
 end
 
+@noinline throw_nonbool(@nospecialize(x)) = throw(TypeError(:if, "", Bool, x))
+
 function emit_cond_goto!(fc::FnCtx, c::CGVal, next::Int, dest::Int)
-    (c.typ === Bool && c.kind === Inline) || unsupported("a condition of type ", c.typ)
-    cond = LLVM.trunc!(fc.builder, c.V, LLVM.Int1Type())
+    b = fc.builder
+    cond = if c.typ === Bool && c.kind === Inline
+        LLVM.trunc!(b, c.V, LLVM.Int1Type())
+    elseif Bool <: c.typ && c.kind in (Boxed, UnionVal)
+        # a condition that may not be a Bool: the `true` and `false` singletons, and a
+        # `TypeError(:if, "", Bool, x)` for anything else
+        v = convert_repr(fc, c, Any)
+        ist = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, v.V, literal_pointer(fc, true))
+        isf = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, v.V, literal_pointer(fc, false))
+        emit_guard!(fc, LLVM.or!(b, ist, isf), throw_nonbool, v)
+        ist
+    else
+        unsupported("a condition of type ", c.typ)
+    end
     add_edge!(fc, next)
     add_edge!(fc, dest)
     LLVM.br!(fc.builder, cond, fc.blocks[next], fc.blocks[dest])
@@ -188,20 +202,68 @@ function phi_input(fc::FnCtx, node::Core.PhiNode, pred::Int)
     return operand(fc, node.values[k])
 end
 
+# Conversions that need control flow (between unions and other representations, and
+# boxing a value that may have a box) can't be placed in front of a predecessor's
+# terminator: such edges get a block of their own.
+needs_edge_block(v::CGVal, @nospecialize(typ)) =
+    (v.kind === UnionVal && !(repr_kind(typ) === UnionVal && v.typ === typ)) ||
+    (v.kind === Boxed && repr_kind(typ) === UnionVal) ||
+    (v.vboxed !== nothing && !(repr_kind(typ) === v.kind && v.typ === typ))
+
+# redirect the edge from `from` to `to` through a new block (terminated once its
+# conversions are emitted)
+function split_edge!(fc::FnCtx, from::LLVM.BasicBlock, to::LLVM.BasicBlock)
+    term = LLVM.terminator(from)
+    edge = LLVM.BasicBlock(current_function(fc), "phi_edge")
+    for i in 0:Int(LLVM.API.LLVMGetNumSuccessors(term))-1
+        LLVM.API.LLVMGetSuccessor(term, i) == to.ref && LLVM.API.LLVMSetSuccessor(term, i, edge)
+    end
+    return edge
+end
+
 # The incoming values of the phis, converted to the phi's representation at the end of
-# each predecessor.
+# each predecessor, or on an edge of its own.
 function fill_phis!(fc::FnCtx)
     b = fc.builder
+    edge_blocks = Dict{Tuple{Int,LLVM.BasicBlock},LLVM.BasicBlock}()
     for (idx, bi, phi) in fc.phis
         node = fc.ir.stmts.stmt[idx]::Core.PhiNode
         typ = CC.widenconst(fc.ir.stmts.type[idx])
         for (pred, exitbb) in unique(fc.edges[bi])
-            LLVM.position!(b, LLVM.before(LLVM.terminator(exitbb)))
+            haskey(edge_blocks, (bi, exitbb)) && continue
+            v = phi_input(fc, node, pred)
+            if v !== nothing && needs_edge_block(v, typ)
+                edge_blocks[(bi, exitbb)] = split_edge!(fc, exitbb, fc.blocks[bi])
+            end
+        end
+    end
+    # conversions on a split edge may add blocks: track the tail of each edge, and add the
+    # incoming values once all of them are emitted
+    tails = copy(edge_blocks)
+    pending = Tuple{LLVM.Instruction,LLVM.Value,Tuple{Int,LLVM.BasicBlock},LLVM.BasicBlock}[]
+    for (idx, bi, phi) in fc.phis
+        node = fc.ir.stmts.stmt[idx]::Core.PhiNode
+        typ = CC.widenconst(fc.ir.stmts.type[idx])
+        for (pred, exitbb) in unique(fc.edges[bi])
+            key = (bi, exitbb)
+            if haskey(tails, key)
+                LLVM.position!(b, LLVM.at_end(tails[key]))
+            else
+                LLVM.position!(b, LLVM.before(LLVM.terminator(exitbb)))
+            end
             v = phi_input(fc, node, pred)
             val = (v === nothing || v.kind === Bottom) ? undef_value(LLVM.value_type(phi)) :
                   convert_repr(fc, v, typ).V
-            push!(LLVM.incoming(phi), (val, current_block(b)))
+            push!(pending, (phi, val, key, current_block(b)))
+            haskey(tails, key) && (tails[key] = current_block(b))
         end
+    end
+    for (phi, val, key, bb) in pending
+        push!(LLVM.incoming(phi), (val, get(tails, key, bb)))
+    end
+    for ((bi, _), tail) in tails
+        LLVM.position!(b, LLVM.at_end(tail))
+        LLVM.br!(b, fc.blocks[bi])
     end
 end
 

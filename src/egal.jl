@@ -1,7 +1,7 @@
 # `===` as native code lowers it (`emit_f_is`, `emit_bits_compare`, `emit_box_compare` in
 # the C++ code generator): by identity where that is equality, by contents for
 # immutable values, and through the runtime's `jl_egal__unboxed` for objects compared by
-# their contents. Unboxed unions are left to the runtime for now.
+# their contents.
 
 i1(x::Bool) = LLVM.ConstantInt(LLVM.Int1Type(), x ? 1 : 0)
 iptr_type(fc::FnCtx) = LLVM.IntType(8 * config(fc).target.pointer_size)
@@ -17,7 +17,6 @@ bool_value(fc::FnCtx, c::LLVM.Value) = inline(Bool, LLVM.zext!(fc.builder, c, LL
 """
 function emit_egal(fc::FnCtx, x::CGVal, y::CGVal)
     isconstant(x) && isconstant(y) && return const_value(fc, constant_value(x) === constant_value(y))
-    (x.kind === UnionVal || y.kind === UnionVal) && return nothing
     r = emit_f_is(fc, x, y)
     r isa LLVM.ConstantInt && return const_value(fc, convert(Bool, r))
     return bool_value(fc, r)
@@ -100,9 +99,21 @@ end
 
 # whether `v` is of the concrete type `T` (`emit_exactly_isa`)
 function emit_exactly_isa(fc::FnCtx, v::CGVal, @nospecialize T)
+    b = fc.builder
     isconstant(v) && return i1(Core.Typeof(constant_value(v)) === T)
+    if v.kind === UnionVal
+        t = union_tindex_value(fc, v)
+        any(M -> M === T, union_members(v.typ)) &&
+            return LLVM.icmp!(b, LLVM.API.LLVMIntEQ, t, i8(union_tindex(v.typ, T)))
+        # a member that only lives boxed: the type of the box
+        any(M -> !union_member_ok(M) && T <: M, Base.uniontypes(v.typ)) || return i1(false)
+        return emit_if(fc, LLVM.icmp!(b, LLVM.API.LLVMIntEQ, t, i8(0)), LLVM.Int1Type();
+                       name="exactly_isa", otherwise=i1(false)) do
+            LLVM.icmp!(b, LLVM.API.LLVMIntEQ, emit_tag(fc, union_box_value(fc, v)), tag_constant(fc, T))
+        end
+    end
     v.kind === Boxed &&
-        return LLVM.icmp!(fc.builder, LLVM.API.LLVMIntEQ, emit_tag(fc, v.V), tag_constant(fc, T))
+        return LLVM.icmp!(b, LLVM.API.LLVMIntEQ, emit_tag(fc, v.V), tag_constant(fc, T))
     return i1(v.typ === T)
 end
 
@@ -125,7 +136,11 @@ function emit_f_is(fc::FnCtx, x::CGVal, y::CGVal; null1=nothing, null2=nothing)
     for (a, c) in ((x, y), (y, x))
         c.kind === Ghost || continue
         cv = constant_value(c)
-        if a.kind === Boxed
+        if a.kind === UnionVal
+            # (a type is a member of no unboxed union)
+            cv isa Type || return emit_nullcheck_guard2(() -> emit_exactly_isa(fc, a, Core.Typeof(cv)),
+                                                        fc, null1, null2)
+        elseif a.kind === Boxed
             pointer_unique(cv) &&
                 return LLVM.icmp!(b, LLVM.API.LLVMIntEQ, a.V, literal_pointer(fc, cv))
         elseif a.kind === Ghost
@@ -153,7 +168,24 @@ function emit_f_is(fc::FnCtx, x::CGVal, y::CGVal; null1=nothing, null2=nothing)
             end
         end
     end
+    # two unboxed unions of the same type, without boxed members
+    if x.kind === UnionVal && y.kind === UnionVal && x.typ === y.typ && !union_has_boxed(x.typ)
+        return emit_nullcheck_guard2(() -> emit_bitsunion_compare(fc, x, y), fc, null1, null2)
+    end
     return emit_box_compare(fc, x, y; null1, null2)
+end
+
+# the same member, and egal values of it (`emit_bitsunion_compare`)
+function emit_bitsunion_compare(fc::FnCtx, x::CGVal, y::CGVal)
+    b = fc.builder
+    tx, ty = union_tindex_value(fc, x), union_tindex_value(fc, y)
+    same = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, tx, ty)
+    t = LLVM.select!(b, same, tx, i8(0))
+    return tindex_switch(fc, t, union_members(x.typ), LLVM.Int1Type(); name="unionbits_is",
+                         default=() -> i1(false)) do i, M
+        repr_kind(M) === Ghost ? i1(true) :
+            emit_bits_compare(fc, union_member(fc, x, M), union_member(fc, y, M), M)
+    end
 end
 
 # `x === y` of values known to be of the concrete immutable type `T` (inline or ghost),
