@@ -227,7 +227,8 @@ function emit_exception_head!(fc::FnCtx, idx::Int, ex::Expr, @nospecialize(typ))
         end
         return ghost(Nothing, nothing)
     elseif head === :(=)
-        # the assignment of a global: `setglobal!` with release order, as native code
+        # the assignment of a global: through its binding, or `setglobal!` with release
+        # order, as native code
         lhs = ex.args[1]
         if lhs isa Core.BindingPartition
             lhs = (ccall(:jl_binding_partition_owner, Any, (Any,), lhs)::Core.Binding).globalref
@@ -235,6 +236,7 @@ function emit_exception_head!(fc::FnCtx, idx::Int, ex::Expr, @nospecialize(typ))
         lhs isa GlobalRef || unsupported("an assignment to ", typeof(lhs))
         rhs = operand(fc, ex.args[2])
         rhs.kind === Bottom && return rhs
+        emit_binding_assignment!(fc, lhs, rhs) && return rhs
         emit_dynamic_call_raw(fc, const_value(fc, Core.setglobal!),
                               CGVal[const_value(fc, lhs.mod), const_value(fc, lhs.name), rhs,
                                     const_value(fc, :release)])

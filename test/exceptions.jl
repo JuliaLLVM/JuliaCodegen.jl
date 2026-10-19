@@ -37,6 +37,12 @@ function e_undef(c)
 end
 e_global_counter = 0
 e_assign(x) = (global e_global_counter = x; e_global_counter)
+global e_typed_global::Int = 1
+e_typed_read() = e_typed_global + 1
+e_typed_assign(x) = (global e_typed_global = x; e_typed_global)
+e_read_undefined() = e_never_assigned
+global e_never_assigned
+e_read_imported() = Base.Filesystem.JL_O_RDONLY + 0   # (an imported constant)
 
 @testset "exceptions" begin
 
@@ -66,6 +72,25 @@ end
     @cgtest e_undef(false)       # UndefVarError
     @test cgrun(e_assign, 7) == 7
     @test e_global_counter == 7
+    # globals with a declared type, and declared globals without a value
+    @cgtest e_typed_read()
+    @test cgrun(e_typed_assign, 5) == 5
+    @test e_typed_global == 5
+    @cgtest e_read_undefined()
+end
+
+@testset "globals" begin
+    # read and written through the binding, as native code does
+    @test @filecheck begin
+        @check_label "define"
+        @check_not "@ijl_apply_generic"
+        @check "store atomic ptr addrspace(10) %{{[0-9]+}}, ptr %{{[0-9]+}} release"
+        @check "load atomic ptr addrspace(10), ptr %{{[0-9]+}} unordered"
+        @check "call void @ijl_undefined_var_error"
+        test_ir(e_assign, (Int,))
+    end
+    # a typed global is assigned through the runtime, which converts the value
+    @test occursin("@ijl_apply_generic", test_ir(e_typed_assign, (Int,)))
 end
 
 @testset "code" begin

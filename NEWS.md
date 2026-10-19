@@ -74,3 +74,7 @@
 - Layouts for targets whose data layout aligns a field differently than Julia does (e.g.
   `Int128` on SPIR-V, Metal and BPF): a packed struct with the fields at Julia's offsets
   and explicit padding.
+- Globals (not constants) are read and written through their binding, as native code
+  does: an unordered load of the binding's value (with `UndefVarError` from the runtime)
+  and, for globals of type `Any`, a release store and the binding's write barrier; also
+  for `getglobal` and `setglobal!` with constant arguments.
