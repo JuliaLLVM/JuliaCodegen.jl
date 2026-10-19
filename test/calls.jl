@@ -16,8 +16,10 @@ c_call_throws(x) = x > 0 ? x : c_throws(x)
 @noinline c_vararg(xs...) = length(xs)
 c_call_vararg(x) = c_vararg(x, x, x)
 c_closure(x) = (y -> x + y)(3)
-# (`try` is not supported yet)
-@noinline c_strlen(s::String) = try parse(Int, s) catch; length(s) end
+# (a calling convention JuliaCodegen doesn't support, which native code only compiles for
+# x86: LLVM aborts on other targets)
+const C_STDCALL = Sys.ARCH in (:x86_64, :i686)
+@noinline c_strlen(s::String) = Int(ccall(:strlen, stdcall, Csize_t, (Cstring,), s))
 c_call_ccall(s) = c_strlen(s) + 1
 function c_find(v::Vector{Int}, x::Int)
     for (i, y) in enumerate(v)
@@ -61,10 +63,12 @@ end
     @cgtest c_call_vararg(1)
     # a callee with an unsupported construct calls its native code, or throws when the
     # configuration says so
-    @test c_run_fallback(c_call_ccall, "abc") == 4
-    @test any(((mi, why),) -> mi.def.name === :c_strlen && why isa JuliaCodegen.Unsupported,
-              test_fallbacks(c_call_ccall, (String,); config=C_FALLBACK))
-    @test_throws JuliaCodegen.Unsupported cgrun(c_call_ccall, "abc")
+    if C_STDCALL
+        @test c_run_fallback(c_call_ccall, "abc") == 4
+        @test any(((mi, why),) -> mi.def.name === :c_strlen && why isa JuliaCodegen.Unsupported,
+                  test_fallbacks(c_call_ccall, (String,); config=C_FALLBACK))
+        @test_throws JuliaCodegen.Unsupported cgrun(c_call_ccall, "abc")
+    end
 end
 
 @testset "code" begin

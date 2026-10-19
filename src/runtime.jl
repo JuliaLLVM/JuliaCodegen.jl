@@ -12,7 +12,7 @@ function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbo
     sym = runtime_symbol(name)
     haskey(mod.functions, sym) && return mod.functions[sym]
     T_rooted = LLVM.PointerType(AddrSpace.CalleeRooted)
-    if name === :jl_apply_generic || name === :jl_invoke
+    if name === :jl_apply_generic || name === :jl_invoke || name === :jl_new_structv
         # `jl_value_t *(jl_value_t *F, jl_value_t **args, uint32_t nargs)` (`get_func_sig`),
         # and the method instance for `jl_invoke` (`get_func2_sig`)
         params = LLVM.LLVMType[T_tracked(), T_ptr(), LLVM.Int32Type()]
@@ -32,6 +32,23 @@ function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbo
         f = LLVM.Function(mod, sym, LLVM.FunctionType(T_ptr(), [T_tracked(), T_tracked()]))
     elseif name === :jl_alloc_genericmemory
         f = LLVM.Function(mod, sym, LLVM.FunctionType(T_tracked(), [T_tracked(), LLVM.Int64Type()]))
+    elseif name === :jl_excstack_state
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.Int64Type(), [T_ptr()]))
+        if dialect.minor >= v"1.14"
+            push!(f.function_attributes, LLVM.EnumAttribute("nounwind"))
+            push!(f.function_attributes, LLVM.EnumAttribute("willreturn"))
+            f.memory_effects = LLVM.MemoryEffects(:read)
+        end
+    elseif name === :jl_restore_excstack
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_ptr(), LLVM.Int64Type()]))
+    elseif name === :jl_enter_handler
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_ptr(), T_ptr()]))
+    elseif name === :jl_pop_handler || name === :jl_pop_handler_noexcept
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_ptr(), LLVM.Int32Type()]))
+        push!(f.function_attributes, LLVM.EnumAttribute("nounwind"))
+        push!(f.function_attributes, LLVM.EnumAttribute("willreturn"))
+    elseif name === :jl_current_exception
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(T_tracked(), [T_ptr()]))
     elseif name === :jl_throw
         f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_rooted]))
         push!(f.function_attributes, LLVM.EnumAttribute("noreturn"))

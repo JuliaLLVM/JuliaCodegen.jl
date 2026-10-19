@@ -47,7 +47,12 @@ declaration(f::LLVM.Function) =
         for (name, f, tt) in [(:jl_apply_generic, (f, x) -> f(x), Tuple{Any,Any}),
                               (:jl_throw, x -> throw(x), Tuple{Any}),
                               (:jl_subtype, x -> x isa Integer, Tuple{Any}),
-                              (:jl_egal__unboxed, (x, y) -> x === y, Tuple{Any,Any})]
+                              (:jl_egal__unboxed, (x, y) -> x === y, Tuple{Any,Any}),
+                              (:jl_excstack_state, x -> try probe_throws(x) catch; 0 end, Tuple{Int}),
+                              (:jl_pop_handler, x -> try probe_throws(x) catch; 0 end, Tuple{Int}),
+                              (:jl_pop_handler_noexcept, x -> try probe_throws(x) catch; 0 end, Tuple{Int}),
+                              (:jl_restore_excstack, x -> try probe_throws(x) catch; 0 end, Tuple{Int}),
+                              (:jl_current_exception, x -> try probe_throws(x) catch e; e end, Tuple{Int})]
             @dispose nmod=parse(LLVM.Module, native_module_ir(f, tt)) mod=LLVM.Module("ours") begin
                 nf = nmod.functions[JC.runtime_symbol(name)]
                 @test declaration(JC.declare_runtime(mod, dialect, name)) == declaration(nf)

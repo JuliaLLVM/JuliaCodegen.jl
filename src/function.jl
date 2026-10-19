@@ -92,6 +92,13 @@ function emit_body!(cgm::CGModule, info::FuncInfo, ir::CC.IRCode)
         for i in 1:length(ir.cfg.blocks)
             push!(fc.blocks, LLVM.BasicBlock(info.llvmf, "L$i"))
         end
+        # each UpsilonNode feeds one PhiCNode
+        for (i, stmt) in enumerate(ir.stmts.stmt)
+            stmt isa Core.PhiCNode || continue
+            for v in stmt.values
+                fc.upsilon_to_phic[(v::Core.SSAValue).id] = i
+            end
+        end
         LLVM.br!(b, fc.blocks[1])
         walk_function!(fc)
         fill_phis!(fc)

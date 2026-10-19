@@ -37,6 +37,7 @@ include("unions.jl")
 include("memory.jl")
 include("cabi.jl")
 include("ccall.jl")
+include("exceptions.jl")
 include("ir.jl")
 
 end
