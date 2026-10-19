@@ -12,7 +12,6 @@ import Libdl
 
 include("errors.jl")
 include("target.jl")
-include("capabilities.jl")
 include("config.jl")
 
 end

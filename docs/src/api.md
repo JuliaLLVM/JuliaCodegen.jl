@@ -24,21 +24,12 @@ JuliaCodegen.has_backend
 JuliaCodegen.AddrSpace
 ```
 
-## Runtime capabilities
-
-```@docs
-JuliaCodegen.Capabilities
-JuliaCodegen.capabilities
-JuliaCodegen.require
-```
-
 ## Errors and failure policies
 
 ```@docs
 JuliaCodegen.Unsupported
 JuliaCodegen.unsupported
 JuliaCodegen.InternalError
-JuliaCodegen.MissingCapability
 JuliaCodegen.FAILURE_POLICIES
 JuliaCodegen.handle_failure
 ```

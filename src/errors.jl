@@ -39,21 +39,6 @@ function Base.showerror(io::IO, e::InternalError)
 end
 
 """
-    JuliaCodegen.MissingCapability(capability, what)
-
-Thrown when `what` needs a capability of the Julia runtime (see
-[`JuliaCodegen.Capabilities`](@ref)) that the running Julia does not have.
-"""
-struct MissingCapability <: Exception
-    capability::Symbol
-    what::String
-end
-
-Base.showerror(io::IO, e::MissingCapability) =
-    print(io, "JuliaCodegen: ", e.what, " needs the `", e.capability,
-          "` capability, which this Julia does not provide")
-
-"""
 The policies for what happens when compiling something fails:
 
 - `:fallback`: leave it to Julia's own code generator (or, inside a function being

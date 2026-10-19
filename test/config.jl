@@ -57,32 +57,10 @@ end
     @test host.datalayout == native_dl
 end
 
-@testset "Capabilities" begin
-    caps = JC.capabilities()
-    @test caps isa JC.Capabilities
-    @test caps === JC.capabilities()
-    # what the running Julia has
-    @test caps.publish == isdefined(Base.Experimental, :publish_codeinst!)
-    @test caps.codegen_hook == isdefined(Base.Experimental, :set_codegen_hook!)
-
-    none = JC.Capabilities()
-    @test !none.publish && !none.codegen_hook
-    @test sprint(show, none) == "JuliaCodegen.Capabilities()"
-    some = JC.Capabilities(; publish=true, add_module=true)
-    @test sprint(show, some) == "JuliaCodegen.Capabilities(publish, add_module)"
-
-    @test JC.require(some, :publish, "publishing") === nothing
-    @test @filecheck throws=JC.MissingCapability begin
-        @check "JuliaCodegen: the runtime hook needs the `codegen_hook` capability, which this Julia does not provide"
-        JC.require(some, :codegen_hook, "the runtime hook")
-    end
-end
-
 @testset "CodegenConfig" begin
     config = JC.CodegenConfig()
     @test config.target === JC.host_target()
     @test config.julia == VERSION
-    @test config.capabilities === JC.capabilities()
     @test config.on_unsupported === :fallback
     @test config.on_internal_error === :fallback
 

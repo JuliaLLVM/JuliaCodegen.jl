@@ -6,5 +6,4 @@
 - Test helpers: differential execution against native code (`@cgtest`), IR verification
   with JuliaIR.jl's GCInvariantVerifier, FileCheck.jl.
 - `CodegenConfig`: the target (`Target`, `host_target`), the Julia version of the IR
-  conventions, the runtime `Capabilities` (detected at load time) and the failure
-  policies for unsupported code and internal errors.
+  conventions and the failure policies for unsupported code and internal errors.
