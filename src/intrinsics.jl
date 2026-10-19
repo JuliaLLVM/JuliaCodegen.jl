@@ -63,6 +63,13 @@ const CHECKED_ARITH = Dict{Symbol,String}(
 
 const CHECKED_DIVREM = (:checked_sdiv_int, :checked_udiv_int, :checked_srem_int, :checked_urem_int)
 
+# the instruction of the intrinsic `name`, with all fast-math flags for the `_fast` ones, as
+# native code
+function fast!(name::Symbol, v::LLVM.Value)
+    endswith(String(name), "_fast") && v isa LLVM.Instruction && (v.fast_math.fast = true)
+    return v
+end
+
 isfloat_type(t::LLVM.LLVMType) =
     t isa Union{LLVM.HalfType,LLVM.BFloatType,LLVM.FloatType,LLVM.DoubleType}
 float_bits(t::LLVM.LLVMType) = t isa LLVM.DoubleType ? 64 : t isa LLVM.FloatType ? 32 : 16
@@ -142,17 +149,17 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
     if haskey(INT_BINOPS, name)
         return iresult(fc, INT_BINOPS[name](b, xs[1], xs[2]), rt)
     elseif haskey(FLOAT_BINOPS, name)
-        return iresult(fc, FLOAT_BINOPS[name](b, xs[1], xs[2]), rt)
+        return iresult(fc, fast!(name, FLOAT_BINOPS[name](b, xs[1], xs[2])), rt)
     elseif haskey(ICMP, name)
         return iresult(fc, LLVM.icmp!(b, ICMP[name], xs[1], xs[2]), Bool)
     elseif haskey(FCMP, name)
-        return iresult(fc, LLVM.fcmp!(b, FCMP[name], xs[1], xs[2]), Bool)
+        return iresult(fc, fast!(name, LLVM.fcmp!(b, FCMP[name], xs[1], xs[2])), Bool)
     elseif name === :neg_int
         return iresult(fc, LLVM.neg!(b, xs[1]), rt)
     elseif name === :not_int
         return iresult(fc, LLVM.not!(b, xs[1]), rt)
     elseif name === :neg_float || name === :neg_float_fast
-        return iresult(fc, LLVM.fneg!(b, xs[1]), rt)
+        return iresult(fc, fast!(name, LLVM.fneg!(b, xs[1])), rt)
     elseif name === :fpiseq
         return emit_fpiseq(fc, args, xs)
     elseif name in (:shl_int, :lshr_int, :ashr_int)
@@ -162,7 +169,7 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
         neg = LLVM.icmp!(b, LLVM.API.LLVMIntSLT, y, LLVM.ConstantInt(LLVM.value_type(y), 0))
         return iresult(fc, LLVM.select!(b, neg, LLVM.neg!(b, x), x), rt)
     elseif haskey(FLOAT_UNARY, name)
-        return iresult(fc, call_llvm_intrinsic!(fc, FLOAT_UNARY[name], [LLVM.value_type(xs[1])], xs), rt)
+        return iresult(fc, fast!(name, call_llvm_intrinsic!(fc, FLOAT_UNARY[name], [LLVM.value_type(xs[1])], xs)), rt)
     elseif name === :copysign_float
         return iresult(fc, call_llvm_intrinsic!(fc, "llvm.copysign", [LLVM.value_type(xs[1])], xs), rt)
     elseif name === :fma_float
@@ -171,9 +178,9 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
         return iresult(fc, call_llvm_intrinsic!(fc, "llvm.fma", [LLVM.value_type(xs[1])], xs), rt)
     elseif name === :muladd_float
         return iresult(fc, call_llvm_intrinsic!(fc, "llvm.fmuladd", [LLVM.value_type(xs[1])], xs), rt)
-    elseif name === :min_float || name === :max_float
-        nm = name === :min_float ? "llvm.minimum" : "llvm.maximum"
-        return iresult(fc, call_llvm_intrinsic!(fc, nm, [LLVM.value_type(xs[1])], xs), rt)
+    elseif name in (:min_float, :max_float, :min_float_fast, :max_float_fast)
+        nm = name in (:min_float, :min_float_fast) ? "llvm.minimum" : "llvm.maximum"
+        return iresult(fc, fast!(name, call_llvm_intrinsic!(fc, nm, [LLVM.value_type(xs[1])], xs)), rt)
     elseif haskey(INT_UNARY, name)
         return emit_int_unary(fc, name, xs, rt)
     elseif haskey(CHECKED_ARITH, name)
