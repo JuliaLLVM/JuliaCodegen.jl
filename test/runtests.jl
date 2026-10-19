@@ -25,6 +25,7 @@ include("memory.jl")
 include("ccall.jl")
 include("exceptions.jl")
 include("specsig.jl")
+include("cfunction.jl")
 include("cabi_targets.jl")
 
 @testset "Aqua" begin

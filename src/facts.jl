@@ -16,7 +16,13 @@ The facts about the running Julia's runtime that generated code depends on, from
 - `setjmp`: the name of the runtime's setjmp;
 - `smalltag_shift`, `max_small_tag`: objects of builtin types carry `smalltag << 4` in
   their header instead of the address of their type; a `DataType`'s tag is
-  `flags >> smalltag_shift`, and tags are below `max_small_tag`.
+  `flags >> smalltag_shift`, and tags are below `max_small_tag`;
+- `task_world_age`: the offset of the world age in `jl_task_t`;
+- `cfunction_cache`, `cfuncdata_size`: the call-site data of a `@cfunction` that
+  `jl_get_abi_converter` resolves its entry point with (`cfuncdata_t`, of
+  `cfuncdata_size` bytes), and where the entry point and the world it is valid in are
+  cached: in separate words passed with it (`:arguments`, Julia 1.12), or in its first
+  two fields (`:cfuncdata`).
 """
 struct RuntimeFacts
     task_gcstack::Int
@@ -28,6 +34,9 @@ struct RuntimeFacts
     setjmp::String
     smalltag_shift::Int
     max_small_tag::Int
+    task_world_age::Int
+    cfunction_cache::Symbol
+    cfuncdata_size::Int
 end
 
 """
@@ -46,7 +55,8 @@ const RUNTIME_FACTS = OncePerProcess{RuntimeFacts}() do
         rt = JuliaIR.runtime_layout(dialect, mod)
         RuntimeFacts(rt.task_gcstack, rt.task_ptls, rt.task_eh, rt.tls_safepoint,
                      rt.handler_size, rt.handler_align, rt.setjmp, rt.smalltag_shift,
-                     rt.max_small_tag)
+                     rt.max_small_tag, rt.task_world_age, rt.cfunction_cache,
+                     rt.cfuncdata_size)
     end
 end
 

@@ -50,3 +50,8 @@
   (`emit_specsig_wrapper!`), declared as native code declares it, and calls of functions
   in it (`emit_specsig_call!`). Arguments and results with references to objects (split
   roots) and union results are not handled yet.
+- `@cfunction` of functions known at compile time: C-callable wrappers in the target's C
+  ABI that adopt foreign threads, run in the latest world and call through the entry point
+  the runtime resolves and caches at the call site (`jl_get_abi_converter`), in the
+  specsig convention or, for results it doesn't handle, the jlcall convention. Closures
+  (`$f`) are not handled yet.
