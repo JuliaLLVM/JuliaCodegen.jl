@@ -7,10 +7,18 @@ authors = ["Valentin Churavy <v.churavy@gmail.com>"]
 projects = ["test", "docs"]
 
 [deps]
+JuliaIR = "3913dba9-7ba9-44aa-bf76-1cfa3b3073b1"
 LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 
+# until JuliaIR.jl (and the LLVM.jl changes it needs) are released: JuliaIR.jl's open
+# stack, with the runtime facts JuliaCodegen needs (JuliaLLVM/JuliaIR.jl#21)
+[sources]
+JuliaIR = {url = "https://github.com/JuliaLLVM/JuliaIR.jl", rev = "vc/runtime-smalltags"}
+LLVM = {url = "https://github.com/JuliaLLVM/LLVM.jl", rev = "tb/inline-api"}
+
 [compat]
+JuliaIR = "0.1"
 LLVM = "10.2.1"
 Libdl = "1"
 julia = "1.12"
