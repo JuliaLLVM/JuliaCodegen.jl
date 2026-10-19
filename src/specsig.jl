@@ -140,13 +140,19 @@ end
 
 The entry of the function `info` in the specsig convention (see
 [`specsig_abi`](@ref JuliaCodegen.specsig_abi)), named `name`, which natively compiled
-code can call directly. Throws `Unsupported` for signatures it doesn't handle, and for
-varargs methods, which native code calls in the jlcall convention.
+code can call directly. A varargs method takes its arguments one by one, as native code
+passes them. Throws `Unsupported` for signatures it doesn't handle, and for signatures
+ending in `Vararg`, which native code calls in the jlcall convention.
 """
 function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractString)
     m = info.mi.def
-    m isa Method && m.isva && unsupported("the specsig convention for the varargs method ", m)
-    sig = specsig_abi(cgm, info.argtypes, info.rettype)
+    isva = m isa Method && m.isva
+    # (a varargs method takes its arguments one by one, as native code passes them, in a
+    # signature without `Vararg`; others are called in the jlcall convention)
+    argtypes = isva ? signature_argtypes(info.mi) : info.argtypes
+    isva && any(T -> T isa Core.TypeofVararg, argtypes) &&
+        unsupported("the specsig convention for the varargs signature of ", info.mi)
+    sig = specsig_abi(cgm, argtypes, info.rettype)
     f = LLVM.Function(cgm.mod, String(name), sig.ft)
     sig.gcstack && LLVM.callconv!(f, LLVM.API.LLVMSwiftCallConv)
     init_function!(f, cgm.config.target)
@@ -162,9 +168,12 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
             fc.pgcstack = ps[p]
             p += 1
         end
-        ops = LLVM.Value[]
-        for (T, k) in zip(info.argtypes, sig.args)
-            k === nothing && continue
+        args = CGVal[]
+        for (T, k) in zip(argtypes, sig.args)
+            if k === nothing
+                push!(args, ghost(T, something(ghost_value(T))))
+                continue
+            end
             v = ps[p]
             p += 1
             cv = if k === SpecByRef
@@ -174,7 +183,13 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
             else
                 CGVal(T, k === SpecBoxed ? Boxed : Inline, v, nothing, nothing)
             end
-            push!(ops, convert_repr(fc, cv, T).V)
+            push!(args, cv)
+        end
+        isva && (args = pack_varargs(fc, info.mi, args))
+        ops = LLVM.Value[]
+        for (a, T) in zip(args, info.argtypes)
+            repr_kind(T) === Ghost && continue
+            push!(ops, convert_repr(fc, a, T).V)
         end
         r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, ops)
         # (the entry is the function, as native code's: inlined by any pipeline)

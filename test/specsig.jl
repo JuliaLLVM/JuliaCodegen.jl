@@ -22,6 +22,7 @@ ss_box(x::Int) = Ref(x)
 ss_throw(x) = throw(ArgumentError("ss_throw $x"))
 ss_vec(v::SS_V4) = map(x -> VecElement(x.value * 2f0), v)
 @noinline ss_vararg(xs...) = length(xs)
+ss_vararg2(a, xs...) = a + sum(xs)
 
 # The first function definition's header in native code for `f(::types...)`, without
 # names: the convention, the result and the parameters with their attributes.
@@ -119,6 +120,8 @@ const SS_CASES = [
     (ss_mix, (Int8, Bool, UInt16, Float32, SS_Pair, Nothing, String)),
     (ss_fst, (Int, SS_Empty)), (ss_dup, (Int,)), (ss_widen, (Int64,)), (ss_maybe, (Union{Nothing,Int},)),
     (ss_box, (Int,)), (ss_throw, (Int,)), (ss_vec, (SS_V4,)),
+    # (varargs methods, with their arguments one by one)
+    (ss_vararg2, (Int, Float64, Int8)),
 ]
 
 @testset "specsig" begin
@@ -147,7 +150,14 @@ end
     # their payload separately
     @test_throws JuliaCodegen.Unsupported specsig_header(ss_id, (SS_Ref,))
     @test_throws JuliaCodegen.Unsupported specsig_header(ss_id, (Union{Nothing,Int},))
-    @test_throws JuliaCodegen.Unsupported specsig_header(ss_vararg, (Int, Int))
+    # (a signature that ends in `Vararg`: the jlcall convention)
+    @dispose ctx=LLVM.Context() mod=LLVM.Module("x") begin
+        cgm = JuliaCodegen.CGModule(mod, test_config())
+        m = only(methods(ss_vararg))
+        mi = Base.Compiler.specialize_method(m, Tuple{typeof(ss_vararg), Vararg{Int}}, Core.svec())
+        info = JuliaCodegen.get_function!(cgm, mi)
+        @test_throws JuliaCodegen.Unsupported JuliaCodegen.emit_specsig_wrapper!(cgm, info, "x")
+    end
 end
 
 @testset "calls through the convention" begin
