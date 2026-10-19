@@ -565,9 +565,10 @@ end
     JuliaCodegen.emit_llvmcall_cc(fc, ex, typ) -> CGVal
 
 `ccall("llvm.name", llvmcall, rt, argtypes, args...)`: a call of the LLVM function `name`
-(an intrinsic, also one that LLVM doesn't know, which back ends and validation report),
-declared with the LLVM types of `llvmcall` (tuples of `VecElement`s are vectors), as
-native code calls it.
+(an intrinsic, also one that LLVM doesn't know, which back ends and validation report;
+the base name of an overloaded one is mangled from the call's signature), or with
+`"extern name"` of the external function `name`, declared with the LLVM types of
+`llvmcall` (tuples of `VecElement`s are vectors), as native code calls it.
 """
 function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     b = fc.builder
@@ -576,26 +577,33 @@ function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     target isa Tuple && length(target) == 1 && (target = target[1])
     target isa Union{Symbol,String} || unsupported("an llvmcall of a name not known at compile time")
     fname = String(target)
-    # (native code compiles anything but an intrinsic to an error: "llvmcall only supports
-    # intrinsic calls")
-    startswith(fname, "llvm.") || unsupported("an llvmcall of the non-intrinsic ", fname)
     nargs = length(argtypes)
     (nreq == 0 || nreq == nargs) || unsupported("a variadic llvmcall")
-    # (native code mangles the base name of an overloaded intrinsic, e.g. `llvm.powi`, from
-    # the signature)
-    intr = tryparse(LLVM.Intrinsic, fname)
-    intr !== nothing && LLVM.isoverloaded(intr) && LLVM.name(intr) == fname &&
-        unsupported("an llvmcall of the unmangled overloaded intrinsic ", fname)
     mod = fc.cgm.mod
     lrt = llvmcall_type(fc, rt)
     lats = LLVM.LLVMType[llvmcall_type(fc, T) for T in argtypes]
     ft = LLVM.FunctionType(lrt, lats)
-    f = if haskey(LLVM.functions(mod), fname)
-        g = LLVM.functions(mod)[fname]
-        LLVM.function_type(g) == ft || unsupported("an llvmcall of ", fname, " with another signature")
-        g
+    f = if startswith(fname, "extern ")
+        # `extern name`: an external function of that name, e.g. of a GPU runtime
+        llvmcall_function(mod, chopprefix(fname, "extern "), ft)
+    elseif startswith(fname, "llvm.")
+        intr = tryparse(LLVM.Intrinsic, fname)
+        if intr !== nothing && LLVM.isoverloaded(intr) && LLVM.name(intr) == fname
+            # the base name of an overloaded intrinsic (`llvm.powi`): the overload of
+            # the call's signature (`llvm.powi.f64.i32`), as native code mangles it
+            try
+                LLVM.Function(mod, intr, ft)
+            catch err
+                err isa ArgumentError || rethrow()
+                unsupported("an llvmcall of ", fname, " with the signature ", string(ft))
+            end
+        else
+            llvmcall_function(mod, fname, ft)
+        end
     else
-        LLVM.Function(mod, fname, ft)
+        # (native code compiles anything but an intrinsic or an `extern` function to an
+        # error: "llvmcall only supports intrinsic calls")
+        unsupported("an llvmcall of the non-intrinsic ", fname)
     end
     ops = LLVM.Value[]
     for (i, T) in enumerate(argtypes)
@@ -608,6 +616,14 @@ function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     lrt isa LLVM.VoidType && return ghost(Nothing, nothing)
     rty = value_type(fc, rt)
     return inline(rt, LLVM.value_type(r) == rty ? r : reinterpret_value(fc, r, rty))
+end
+
+# the function `name` of `mod` with the type `ft`, declared if there is none
+function llvmcall_function(mod::LLVM.Module, name::AbstractString, ft::LLVM.FunctionType)
+    haskey(LLVM.functions(mod), name) || return LLVM.Function(mod, String(name), ft)
+    f = LLVM.functions(mod)[name]
+    LLVM.function_type(f) == ft || unsupported("an llvmcall of ", name, " with another signature")
+    return f
 end
 
 # Runtime functions that native code emits inline (`emit_ccall`'s special functions):

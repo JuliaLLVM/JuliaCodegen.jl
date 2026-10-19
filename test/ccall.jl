@@ -59,6 +59,8 @@ cc_fma(a, b, c) = ccall("llvm.fma.v4f32", llvmcall, CC_V4, (CC_V4, CC_V4, CC_V4)
 cc_donothing(x) = (ccall("llvm.donothing", llvmcall, Cvoid, ()); x)
 cc_unknown() = (ccall("llvm.jctest.nonexistent", llvmcall, Cvoid, ()); nothing)
 cc_not_intrinsic(x) = ccall("jctest_function", llvmcall, Int, (Int,), x)
+cc_extern(s) = GC.@preserve s Int(ccall("extern strlen", llvmcall, Csize_t, (Ptr{UInt8},), pointer(s)))
+cc_powi(x, n) = ccall("llvm.powi", llvmcall, Float64, (Float64, Int32), x, n)
 
 @testset "ccall" begin
 
@@ -133,6 +135,12 @@ end
         test_module_ir(cc_unknown, (); triple=JuliaCodegen.host_target().triple)
     end
     @test_throws JuliaCodegen.Unsupported test_ir(cc_not_intrinsic, (Int,))
+    # an external function, by name
+    @cgtest cc_extern("four")
+    @test occursin("declare i64 @strlen(ptr)", test_ir(cc_extern, (String,)))
+    # the base name of an overloaded intrinsic: the overload of the signature
+    @cgtest cc_powi(1.5, Int32(3))
+    @test occursin("call double @llvm.powi.f64.i32(double", test_ir(cc_powi, (Float64, Int32)))
 end
 
 end
