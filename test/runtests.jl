@@ -19,6 +19,7 @@ include("walker.jl")
 include("intrinsics.jl")
 include("builtins.jl")
 include("unions.jl")
+include("calls.jl")
 
 @testset "Aqua" begin
     using Aqua

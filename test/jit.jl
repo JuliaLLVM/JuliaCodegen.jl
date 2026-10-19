@@ -23,21 +23,23 @@ struct TestCompiled
     fptr::Ptr{Cvoid}
     roots::Vector{Any}
     ir::String
+    "The functions that call native code instead, and why."
+    fallbacks::Vector{Pair{Core.MethodInstance,Any}}
 end
 
 const TEST_CACHE = Dict{Any,TestCompiled}()
 const TEST_LOCK = ReentrantLock()
 
 """
-    test_compile(tt; optimize=true) -> TestCompiled
+    test_compile(tt; optimize=true, config=test_config()) -> TestCompiled
 
 Compile the call signature `tt` with JuliaCodegen into Julia's JIT. Every module passes
 `verify_ir` before Julia's pipeline runs.
 """
-function test_compile(@nospecialize(tt); optimize::Bool=true)
-    @lock TEST_LOCK get!(TEST_CACHE, (tt, optimize)) do
+function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config())
+    @lock TEST_LOCK get!(TEST_CACHE, (tt, optimize, config.on_unsupported)) do
         jit = test_jit()
-        config = test_config()
+        fallbacks = Pair{Core.MethodInstance,Any}[]
         roots = Any[]
         name = "jctest_entry_$(length(TEST_CACHE) + 1)"
         ir = ""
@@ -48,6 +50,7 @@ function test_compile(@nospecialize(tt); optimize::Bool=true)
             try
                 cgm = JuliaCodegen.CGModule(mod, config)
                 JuliaCodegen.emit_entry!(cgm, tt; name)
+                append!(fallbacks, cgm.fallbacks)
                 ir = string(mod)
                 iptr = LLVM.IntType(8 * sizeof(Ptr{Cvoid}))
                 for (gvname, x) in JuliaCodegen.literal_objects(cgm)
@@ -75,7 +78,7 @@ function test_compile(@nospecialize(tt); optimize::Bool=true)
         jd = LLVM.supports_jit_dylib_creation(jit) ? LLVM.JITDylib(jit, name) : jit.external_dylib
         LLVM.add!(jit, jd, tsm)
         fptr = pointer(LLVM.lookup(jit, jd, name))
-        TestCompiled(fptr, roots, ir)
+        TestCompiled(fptr, roots, ir, fallbacks)
     end
 end
 
@@ -93,10 +96,10 @@ function bind_pgcstack_resolver!(mod::LLVM.Module)
     LLVM.erase!(f)
 end
 
-"Call `f(args...)` with code compiled by JuliaCodegen."
-function cgrun(@nospecialize(f), args...)
+"Call `f(args...)` with code compiled by JuliaCodegen (with the configuration `config`)."
+function cgrun(@nospecialize(f), args...; config=test_config())
     tt = Tuple{Core.Typeof(f), map(Core.Typeof, args)...}
-    c = test_compile(tt)
+    c = test_compile(tt; config)
     argv = Any[args...]
     return GC.@preserve argv c ccall(c.fptr, Any, (Any, Ptr{Any}, UInt32), f, argv, length(argv))
 end
@@ -104,3 +107,7 @@ end
 "The unoptimized IR JuliaCodegen generates for `f(::types...)`."
 test_ir(@nospecialize(f), @nospecialize(types)) =
     test_compile(Tuple{Core.Typeof(f), types...}).ir
+
+"The functions that call native code in what JuliaCodegen generates for `f(::types...)`."
+test_fallbacks(@nospecialize(f), @nospecialize(types); config=test_config()) =
+    test_compile(Tuple{Core.Typeof(f), types...}; config).fallbacks

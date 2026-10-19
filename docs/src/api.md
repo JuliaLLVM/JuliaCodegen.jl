@@ -115,6 +115,10 @@ JuliaCodegen.convert_repr
 JuliaCodegen.emit_intrinsic
 JuliaCodegen.atomic_ordering
 JuliaCodegen.emit_dynamic_call
+JuliaCodegen.get_function!
+JuliaCodegen.process_worklist!
+JuliaCodegen.emit_stub!
+JuliaCodegen.emit_call_info
 JuliaCodegen.emit_unreachable!
 JuliaCodegen.emit_guard!
 JuliaCodegen.entry_alloca!

@@ -81,7 +81,16 @@ invoke_target(@nospecialize(x)) =
 
 function emit_invoke!(fc::FnCtx, ex::Expr, @nospecialize(typ))
     mi = invoke_target(ex.args[1])
-    f = operand(fc, ex.args[2])
-    args = CGVal[operand(fc, a) for a in ex.args[3:end]]
-    return emit_dynamic_call(fc, f, args, typ; invoke=mi)
+    args = CGVal[operand(fc, a) for a in ex.args[2:end]]
+    # a call whose arguments may not match the signature (an invoke of a less specific
+    # method with more specific arguments is fine; others are left to the runtime)
+    sig = signature_argtypes(mi)
+    if !(mi.def isa Method) || mi.def.isva || any(T -> T isa Core.TypeofVararg, sig) ||
+       length(args) != length(sig) || !all(i -> args[i].typ <: sig[i], eachindex(args))
+        return emit_dynamic_call(fc, args[1], args[2:end], typ; invoke=mi)
+    end
+    info = get_function!(fc.cgm, mi)
+    r = emit_call_info(fc, info, args)
+    r.kind === Bottom && return r
+    return convert_repr(fc, r, typ)
 end
