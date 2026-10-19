@@ -64,6 +64,7 @@ function test_compile(@nospecialize(tt); optimize::Bool=true)
                 JuliaCodegen.target_machine(config.target) do tm
                     LLVM.run!(JuliaPipeline(; opt_level=optimize ? 2 : 0), mod, tm)
                 end
+                bind_pgcstack_resolver!(mod)
             catch e
                 # (LLVM.jl wraps exceptions thrown in this callback)
                 err = e
@@ -76,6 +77,20 @@ function test_compile(@nospecialize(tt); optimize::Bool=true)
         fptr = pointer(LLVM.lookup(jit, jd, name))
         TestCompiled(fptr, roots, ir)
     end
+end
+
+# Where TLS isn't ELF TLS (macOS, Windows), LowerPTLS calls `jl_get_pgcstack_resolved`,
+# which Julia's JIT registers as a named global. The dylibs LLVM.jl creates on Julia 1.14
+# and later don't see it, so the test JIT binds it to the runtime's getter itself.
+function bind_pgcstack_resolver!(mod::LLVM.Module)
+    haskey(mod.functions, "jl_get_pgcstack_resolved") || return
+    f = mod.functions["jl_get_pgcstack_resolved"]
+    LLVM.isdeclaration(f) || return
+    getter, key = Ref{Ptr{Cvoid}}(), Ref{Ptr{Cvoid}}()
+    ccall(:jl_pgcstack_getkey, Cvoid, (Ptr{Ptr{Cvoid}}, Ptr{Ptr{Cvoid}}), getter, key)
+    iptr = LLVM.IntType(8 * sizeof(Ptr{Cvoid}))
+    LLVM.replace_uses!(f, LLVM.const_inttoptr(LLVM.ConstantInt(iptr, UInt(getter[])), LLVM.value_type(f)))
+    LLVM.erase!(f)
 end
 
 "Call `f(args...)` with code compiled by JuliaCodegen."
