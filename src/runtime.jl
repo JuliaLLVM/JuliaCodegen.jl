@@ -49,6 +49,9 @@ function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbo
         push!(f.function_attributes, LLVM.EnumAttribute("willreturn"))
     elseif name === :jl_current_exception
         f = LLVM.Function(mod, sym, LLVM.FunctionType(T_tracked(), [T_ptr()]))
+    elseif name === :jl_get_binding_value_seqcst
+        # `jl_value_t *(jl_binding_t *b)`, null when undefined
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(T_tracked(), [T_ptr()]))
     elseif name === :jl_type_error
         # `void (const char *fname, jl_value_t *expected, jl_value_t *got)`
         f = LLVM.Function(mod, sym, LLVM.FunctionType(LLVM.VoidType(), [T_ptr(), T_tracked(), T_rooted]))
@@ -97,7 +100,7 @@ end
 
 # the exported name of a runtime function: `ijl_` for the `jl_` functions libjulia
 # exports under both names (not the internal ones, like `jl_egal__unboxed`)
-const INTERNAL_RUNTIME = (:jl_egal__unboxed, :jl_alloc_genericmemory)
+const INTERNAL_RUNTIME = (:jl_egal__unboxed, :jl_alloc_genericmemory, :jl_get_binding_value_seqcst)
 runtime_symbol(name::Symbol) =
     startswith(String(name), "jl_") && !(name in INTERNAL_RUNTIME) ? "i" * String(name) : String(name)
 

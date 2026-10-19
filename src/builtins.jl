@@ -319,16 +319,23 @@ end
 
 function nonconst_global(fc::FnCtx, ref::GlobalRef)
     d = direct_binding(fc, ref)
-    if d === nothing
-        return emit_dynamic_call(fc, const_value(fc, Core.getglobal),
-                                 CGVal[const_value(fc, ref.mod), const_value(fc, ref.name)], Any)
-    end
-    bnd, T = d
     b = fc.builder
-    v = LLVM.load!(b, T_tracked(), binding_value_address(fc, bnd))
-    LLVM.ordering!(v, LLVM.API.LLVMAtomicOrderingUnordered)
-    LLVM.alignment!(v, config(fc).target.pointer_size)
-    tbaa!(fc, v, :binding)
+    if d === nothing
+        # another binding (imported, not yet resolved, undefined): its value from the
+        # runtime (`jl_get_binding_value_seqcst`), as native code reads it
+        bnd = convert(Core.Binding, ref)
+        t = literal_pointer(fc, bnd)
+        raw = t isa LLVM.AddrSpaceCastInst ? LLVM.operands(t)[1] : LLVM.addrspacecast!(b, t, T_ptr())
+        gb = declare_runtime(fc.cgm.mod, dialect(fc), :jl_get_binding_value_seqcst)
+        v = LLVM.call!(b, LLVM.function_type(gb), gb, LLVM.Value[raw])
+        T = Any
+    else
+        bnd, T = d
+        v = LLVM.load!(b, T_tracked(), binding_value_address(fc, bnd))
+        LLVM.ordering!(v, LLVM.API.LLVMAtomicOrderingUnordered)
+        LLVM.alignment!(v, config(fc).target.pointer_size)
+        tbaa!(fc, v, :binding)
+    end
     # undefined: an UndefVarError, from the runtime as native code's
     f = current_function(fc)
     err = LLVM.BasicBlock(f, "err")
@@ -343,11 +350,11 @@ function nonconst_global(fc::FnCtx, ref::GlobalRef)
     return boxed(T isa Type ? T : Any, v)
 end
 
-# `global ref = v` of a global of type `Any` through its binding, as native code does;
-# `false` for other bindings
+# `global ref = v` of a global through its binding, as native code does, when `v` is of the
+# global's type (no conversion); `false` for other bindings
 function emit_binding_assignment!(fc::FnCtx, ref::GlobalRef, v::CGVal)
     d = direct_binding(fc, ref)
-    (d === nothing || d[2] !== Any) && return false
+    (d === nothing || !(d[2] isa Type && v.typ <: d[2])) && return false
     bnd, _ = d
     b = fc.builder
     p = emit_box(fc, v)
