@@ -55,8 +55,8 @@ signature_argtypes(mi::Core.MethodInstance) =
 function emit_prologue!(fc::FnCtx; safepoint::Bool=true)
     b = fc.builder
     cfg = config(fc)
-    pgcstack = get_pgcstack!(b, fc.cgm.mod, cfg.dialect)
-    fc.current_task = current_task!(b, cfg.runtime, pgcstack)
+    fc.pgcstack = get_pgcstack!(b, fc.cgm.mod, cfg.dialect)
+    fc.current_task = current_task!(b, cfg.runtime, fc.pgcstack)
     if safepoint
         ptls = current_ptls!(b, cfg, fc.cgm.tbaa, fc.current_task)
         safepoint_poll!(b, fc.cgm.mod, cfg, fc.cgm.tbaa, ptls)

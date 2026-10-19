@@ -77,6 +77,7 @@ mutable struct FnCtx <: AbstractFnCtx
     cur_block::Int
     "The entry block, for allocas and the loads of objects."
     top::LLVM.BasicBlock
+    pgcstack::Union{Nothing,LLVM.Value}
     current_task::Union{Nothing,LLVM.Value}
     "The objects loaded at the top of the function, by object."
     loaded::IdDict{Any,LLVM.Value}
@@ -96,7 +97,7 @@ function FnCtx(cgm::CGModule, info::FuncInfo, ir, builder::LLVM.IRBuilder, top::
     nb = ir === nothing ? 0 : length(ir.cfg.blocks)
     return FnCtx(cgm, info, ir, builder, CGVal[], Vector{Union{Nothing,CGVal}}(nothing, n),
                  LLVM.BasicBlock[], [Tuple{Int,LLVM.BasicBlock}[] for _ in 1:nb],
-                 Tuple{Int,Int,LLVM.Instruction}[], 0, top, nothing, IdDict{Any,LLVM.Value}(),
+                 Tuple{Int,Int,LLVM.Instruction}[], 0, top, nothing, nothing, IdDict{Any,LLVM.Value}(),
                  Dict{Int,LLVM.Value}(), Dict{Int,LLVM.Value}(),
                  Dict{Int,Tuple{LLVM.Value,LLVM.Value}}(), Dict{Int,LLVM.Value}(), Dict{Int,Int}())
 end
