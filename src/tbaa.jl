@@ -7,23 +7,26 @@
     JuliaCodegen.tbaa_tree(dialect::JuliaIR.Dialect) -> Dict{Symbol,Symbol}
 
 The TBAA type nodes of the dialect's code generator, by name (without the `jtbaa_`
-prefix), with the name of each one's parent (`:root` for the root `jtbaa`). Julia 1.14
-restructured the tree: object fields are `field` instead of `mutab` and `immut`, memory
-gets a node of its own, and there is no `stack` or `arraybuf` any more.
+prefix), with the name of each one's parent (`:root` for the root `jtbaa`): the tree of
+`jl_tbaacache_t::initialize`. Julia 1.14 restructured it: object fields are `field`
+instead of `mutab` and `immut`, memory has a node of its own, and there is no `arraybuf`
+any more.
 """
 function tbaa_tree(dialect::JuliaIR.Dialect)
     if dialect.minor >= v"1.14"
-        return Dict(:gcframe => :root, :const => :root, :data => :root,
-                    :value => :data, :field => :value, :binding => :value,
+        return Dict(:gcframe => :root, :stack => :root, :memoryselbyte => :root,
+                    :data => :root, :value => :data, :field => :value,
+                    :ptrmemorybuf => :value, :binding => :value, :datatype => :value,
                     :array => :value, :arrayptr => :array, :arraysize => :array,
                     :memory => :value, :memoryptr => :memory, :memorylen => :memory,
-                    :ptrmemorybuf => :value, :memoryselbyte => :root)
+                    :memoryown => :memory, :const => :root, :coverage => :root)
     else
-        return Dict(:gcframe => :root, :const => :root, :stack => :root, :data => :root,
-                    :value => :data, :mutab => :value, :immut => :value,
-                    :arraybuf => :data, :ptrarraybuf => :data, :array => :root,
-                    :arrayptr => :array, :arrayselbyte => :array,
-                    :memoryptr => :array, :memorylen => :array)
+        return Dict(:gcframe => :root, :stack => :root, :unionselbyte => :stack,
+                    :data => :root, :binding => :data, :value => :data, :mutab => :value,
+                    :datatype => :mutab, :immut => :value, :arraybuf => :data,
+                    :ptrarraybuf => :data, :array => :root, :arrayptr => :array,
+                    :arraysize => :array, :arrayselbyte => :array, :memoryptr => :array,
+                    :memorylen => :array, :memoryown => :array, :const => :root)
     end
 end
 
