@@ -302,7 +302,21 @@ function to_union(fc::FnCtx, v::CGVal, @nospecialize U)
         v = convert_repr(fc, v, M)
     end
     payload, roots = member_parts(fc, U, v)
-    return make_union(fc, U, payload, i8(union_tindex(U, M)), roots)
+    t = i8(union_tindex(U, M))
+    if union_has_box(U) && v.kind === Inline && M !== Bool
+        # the box of the value, if it has one: of a constant (native code keeps isbits
+        # constants in unions boxed, JuliaLang/julia#55045), or the box it came from
+        if isconstant(v)
+            return make_union(fc, U, payload, i8(union_tindex(U, M) | UNION_BOX_MARKER), roots;
+                              box=literal_pointer(fc, constant_value(v)))
+        elseif v.vboxed !== nothing
+            # (which may be null: then it has none)
+            t = LLVM.select!(fc.builder, nonnull(fc, v.vboxed),
+                             i8(union_tindex(U, M) | UNION_BOX_MARKER), t)
+            return make_union(fc, U, payload, t, roots; box=v.vboxed)
+        end
+    end
+    return make_union(fc, U, payload, t, roots)
 end
 
 """
