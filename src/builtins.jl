@@ -812,6 +812,38 @@ function emit_isdefined(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     return nothing
 end
 
+# `Core.svec(xs...)`: allocated inline, as native code (from Julia 1.12 on), with the
+# elements boxed first
+function emit_svec(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
+    isempty(args) && return const_value(fc, Core.svec())
+    b = fc.builder
+    W = config(fc).target.pointer_size
+    elems = LLVM.Value[emit_box(fc, a) for a in args]
+    sv = call_op!(fc, "julia.gc_alloc_obj", fc.current_task,
+                  LLVM.ConstantInt(LLVM.Int64Type(), W * (length(args) + 1)),
+                  type_tag(fc, Core.SimpleVector))
+    data = derived(fc, sv)
+    LLVM.store!(b, iptr(fc, length(args)), data; align=W)
+    for (i, e) in enumerate(elems)
+        addr = LLVM.inbounds_gep!(b, LLVM.Int8Type(), data, [iptr(fc, W * i)])
+        st = LLVM.store!(b, e, addr; align=W)
+        LLVM.ordering!(st, LLVM.API.LLVMAtomicOrderingRelease)
+        write_barrier!(b, fc.cgm.mod, dialect(fc), sv, addr, e)
+    end
+    return boxed(Core.SimpleVector, sv)
+end
+
+# `Core._svec_len(sv)`: the length, the first word
+function emit_svec_len(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
+    length(args) == 1 || return nothing
+    sv = args[1]
+    isconstant(sv) && constant_value(sv) isa Core.SimpleVector &&
+        return const_value(fc, length(constant_value(sv)))
+    sv.typ === Core.SimpleVector || return nothing
+    W = config(fc).target.pointer_size
+    return inline(Int, LLVM.load!(fc.builder, iptr_type(fc), derived(fc, emit_box(fc, sv)); align=W))
+end
+
 const BUILTINS = IdDict{Any,Function}(
     Core.:(===) => (fc, args, rt) -> length(args) == 2 ? emit_egal(fc, args[1], args[2]) : nothing,
     Core.ifelse => emit_ifelse,
@@ -826,6 +858,8 @@ const BUILTINS = IdDict{Any,Function}(
     Core.sizeof => emit_sizeof,
     Core.getglobal => emit_getglobal,
     Core.setglobal! => emit_setglobal!,
+    Core.svec => emit_svec,
+    Core._svec_len => emit_svec_len,
 )
 
 """

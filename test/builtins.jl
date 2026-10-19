@@ -45,6 +45,8 @@ b_dynamic_inbounds(t, i) = @inbounds t[i]
 b_dynamic_const(i) = @inbounds (1.0f0, 2.0f0, 3.0f0, 4.0f0)[i]
 b_dynamic_field(m, i) = getfield(m, i)
 b_div(x, y) = div(x, y)
+b_svec(x, y) = Core.svec(x, y, 1)
+b_svec_len(s) = length(s)
 b_memoryref(m, i) = Core.memoryrefnew(Core.memoryrefnew(m), i, true)
 function b_undefvar(c)
     c && (x = 1)
@@ -161,6 +163,9 @@ end
     @cgtest b_sizeof("abcd")
     @cgtest b_sizeof(1.0)
     @cgtest b_getglobal()
+    @cgtest b_svec("a", 2.0)
+    @cgtest b_svec_len(Core.svec(1, "b", :c))
+    @cgtest b_svec_len(Core.svec())
 end
 
 @testset "code" begin
@@ -168,7 +173,8 @@ end
     for (f, types) in ((b_fields, (BPoint,)), (b_new_point, (Float64, Float64)),
                        (b_new_mutable, (Int, Any, BRef)), (b_mutable_set!, (BMutable, Int, Any, BRef)),
                        (b_egal, (BPoint, BPoint)), (b_egal, (Symbol, Symbol)),
-                       (b_isa_int, (Int,)), (b_tuple, (Int, String)), (b_sizeof, (String,)))
+                       (b_isa_int, (Int,)), (b_tuple, (Int, String)), (b_sizeof, (String,)),
+                       (b_svec, (String, Float64)), (b_svec_len, (Core.SimpleVector,)))
         @test @filecheck begin
             @check_not "julia.call"
             print(test_ir(f, types))
