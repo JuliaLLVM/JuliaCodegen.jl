@@ -37,6 +37,46 @@ JuliaCodegen.tbaa_tag
 JuliaCodegen.tbaa!
 ```
 
+## Values
+
+```@docs
+JuliaCodegen.Repr
+JuliaCodegen.repr_kind
+JuliaCodegen.ghost_value
+JuliaCodegen.unique_type_parameter
+JuliaCodegen.FieldStorage
+JuliaCodegen.field_storage
+JuliaCodegen.has_references
+JuliaCodegen.npointers
+JuliaCodegen.union_members
+JuliaCodegen.union_has_boxed
+JuliaCodegen.is_unboxable_union
+JuliaCodegen.is_bits_union
+JuliaCodegen.union_payload_size
+JuliaCodegen.union_payload_align
+JuliaCodegen.union_nroots
+JuliaCodegen.union_has_box
+JuliaCodegen.union_tindex
+JuliaCodegen.UNION_BOX_MARKER
+JuliaCodegen.union_type
+JuliaCodegen.Layouts
+JuliaCodegen.Layout
+JuliaCodegen.LayoutMode
+JuliaCodegen.layout
+JuliaCodegen.value_type
+JuliaCodegen.primitive_nbits
+JuliaCodegen.is_vector_tuple
+JuliaCodegen.MAX_INLINE_BYTES
+JuliaCodegen.CGVal
+JuliaCodegen.ghost
+JuliaCodegen.bottom
+JuliaCodegen.inline
+JuliaCodegen.boxed
+JuliaCodegen.unboxed_union
+JuliaCodegen.isconstant
+JuliaCodegen.constant_value
+```
+
 ## Targets
 
 ```@docs
