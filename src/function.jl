@@ -6,7 +6,8 @@
 The attributes every function defined by the code generator has, as native code gives
 them (`jl_init_function`): unwind tables on 64-bit Windows (for its exception handling,
 which unwinds through every frame), a 16-byte aligned stack on 32-bit Windows, frame
-pointers where native code keeps them, and inline stack probes but on Windows.
+pointers (on every target from Julia 1.13 on, before where native code doesn't omit them,
+`jl_fpo_disabled`), and inline stack probes but on Windows.
 """
 function init_function!(f::LLVM.Function, target::Target)
     (; arch, os) = platform(target.triple)
@@ -14,7 +15,9 @@ function init_function!(f::LLVM.Function, target::Target)
     os === :windows && arch === :i686 && push!(attrs, LLVM.EnumAttribute("alignstack", 16))
     # (`uwtable` with `UWTableKind::Default`, which LLVM encodes as 2)
     os === :windows && arch === :x86_64 && push!(attrs, LLVM.EnumAttribute("uwtable", 2))
-    os in (:linux, :windows, :freebsd, :openbsd) && push!(attrs, LLVM.StringAttribute("frame-pointer", "all"))
+    # (the running Julia's rule, whose IR is emitted)
+    (VERSION >= v"1.13-" || os in (:linux, :windows, :freebsd, :openbsd)) &&
+        push!(attrs, LLVM.StringAttribute("frame-pointer", "all"))
     os === :windows || push!(attrs, LLVM.StringAttribute("probe-stack", "inline-asm"))
     return f
 end

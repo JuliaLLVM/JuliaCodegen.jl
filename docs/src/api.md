@@ -90,6 +90,7 @@ JuliaCodegen.operand
 JuliaCodegen.method_instance
 JuliaCodegen.get_ir
 JuliaCodegen.emit_entry!
+JuliaCodegen.init_function!
 JuliaCodegen.declare_function!
 JuliaCodegen.signature_argtypes
 JuliaCodegen.emit_body!
