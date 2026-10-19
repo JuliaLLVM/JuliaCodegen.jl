@@ -7,4 +7,12 @@ A code generator for Julia written in Julia: it lowers typed, optimized Julia IR
 """
 module JuliaCodegen
 
+using LLVM
+import Libdl
+
+include("errors.jl")
+include("target.jl")
+include("capabilities.jl")
+include("config.jl")
+
 end
