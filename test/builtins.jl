@@ -40,6 +40,10 @@ b_getglobal() = Core.getglobal(Base, :pi)
 b_namedtuple(nt) = (nt.a, nt.b)
 b_const_field(c::BConst) = (c.c, c.v)
 b_tuple_index(t) = (t[1], t[2])
+b_dynamic_index(t, i) = t[i]
+b_dynamic_inbounds(t, i) = @inbounds t[i]
+b_dynamic_const(i) = @inbounds (1.0f0, 2.0f0, 3.0f0, 4.0f0)[i]
+b_dynamic_field(m, i) = getfield(m, i)
 
 const B_EGAL_PAIRS = Any[
     (1, 1), (1, 2), (1, 1.0), (NaN, NaN), (0.0, -0.0), (1.0f0, 1.0f0), (true, true), (true, false),
@@ -110,6 +114,19 @@ end
     @cgtest b_namedtuple((a=1, b="b"))
     @cgtest b_const_field(BConst(1, 2))
     @cgtest b_tuple_index((1, "a", 2.0))
+    # fields whose index is only known at run time
+    for t in Any[(1, 2), (1.0f0, 2.0f0, 3.0f0, 4.0f0, 5.0f0), ("a", "b", "c", "d"), ("a", :b, 3),
+                 (BPoint(1, 2), BPoint(3, 4), BPoint(5, 6), BPoint(7, 8)),
+                 ntuple(i -> VecElement(Float32(i)), 4), (nothing, nothing), (7,)],
+        i in (1, 2, 0, length(t) + 1)      # (out of bounds: BoundsError)
+        @cgtest b_dynamic_index(t, i)
+        1 <= i <= length(t) && @cgtest b_dynamic_inbounds(t, i)
+    end
+    @cgtest b_dynamic_const(3)
+    @cgtest b_dynamic_field(BPoint(1, 2), 2)
+    @cgtest b_dynamic_field(BMutable(1, "a", BRef(2, "b")), 2)
+    @cgtest b_dynamic_field(BPartial(3), 2)        # UndefRefError
+    @cgtest b_dynamic_field(BPartial(3), 3)        # BoundsError
     # the write barrier: young objects stored into an old one survive collections
     old = BMutable(0, nothing, BRef(0, ""))
     GC.gc(); GC.gc()
@@ -141,7 +158,9 @@ end
     for (f, types) in ((b_fields, (BPoint,)), (b_new_point, (Float64, Float64)),
                        (b_new_mutable, (Int, Any, BRef)), (b_mutable_set!, (BMutable, Int, Any, BRef)),
                        (b_egal, (BPoint, BPoint)), (b_egal, (Symbol, Symbol)),
-                       (b_isa_int, (Int,)), (b_tuple, (Int, String)), (b_sizeof, (String,)))
+                       (b_isa_int, (Int,)), (b_tuple, (Int, String)), (b_sizeof, (String,)),
+                       (b_dynamic_inbounds, (NTuple{2,Int}, Int)), (b_dynamic_inbounds, (NTuple{4,Float32}, Int)),
+                       (b_dynamic_inbounds, (NTuple{4,String}, Int)))
         @test @filecheck begin
             @check_not "julia.call"
             print(test_ir(f, types))
@@ -159,6 +178,13 @@ end
             @check_count 2 "@julia.field_write_barrier.p11("
             print(ir)
         end
+    end
+    # a constant tuple indexed at run time is loaded from a constant global, as native
+    # code's (which GPU back ends place in constant memory)
+    @test @filecheck begin
+        @check "@_j_const{{.*}} = private unnamed_addr constant [4 x float]"
+        @check "load float, ptr"
+        print(test_ir(b_dynamic_const, (Int,)))
     end
     # the box of an object is compared by the runtime only if it isn't identical
     @test @filecheck begin

@@ -393,7 +393,18 @@ function emit_getfield(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     T = x.typ
     (T isa DataType && isconcretetype(T)) || return nothing
     i = field_index(T, args[2])
-    i === nothing && return nothing
+    if i === nothing
+        (args[2].typ === Int && args[2].kind === Inline && !isconstant(args[2])) || return nothing
+        bc = const_value(fc, true)
+        for a in args[3:end]
+            if a.typ === Bool
+                bc = a
+            elseif !(isconstant(a) && constant_value(a) === :not_atomic)
+                return nothing
+            end
+        end
+        return emit_getfield_unknownidx(fc, x, T, args[2], bc, rt)
+    end
     # an explicit order: the plain access of a non-atomic field, or the atomic load of an
     # atomic one (mismatches are the runtime's ConcurrencyViolationError)
     order = :not_atomic
@@ -444,6 +455,96 @@ function emit_getfield(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
         return convert_repr(fc, boxed(FT, p), rt)
     end
     return nothing
+end
+
+# `getfield(x, i)` of the field whose index `i` (an `Int`) is only known at run time,
+# with the bounds check of the boundscheck argument `bc` (native code's
+# `emit_getfield_unknownidx`): of the fields of an inline tuple of a single type, or of an
+# object whose fields are all references or all of a single type
+function emit_getfield_unknownidx(fc::FnCtx, x::CGVal, @nospecialize(T), idx::CGVal, bc::CGVal,
+                                  @nospecialize(rt))
+    n = fieldcount(T)
+    n == 0 && return nothing
+    b = fc.builder
+    types = fieldtypes(T)
+    FT = types[1]
+    same = all(t -> t === FT, types)
+    if n == 1
+        lowered = fc -> emit_getfield(fc, CGVal[x, const_value(fc, 1)], rt)
+    elseif x.kind === Ghost || (same && repr_kind(FT) === Ghost)
+        same || return nothing
+        lowered = fc -> convert_repr(fc, ghost(FT, something(ghost_value(FT))), rt)
+    elseif x.kind === Inline
+        lay = layout(fc, T)
+        (same && (lay.llvm isa LLVM.ArrayType || lay.llvm isa LLVM.VectorType)) || return nothing
+        lowered = fc -> begin
+            v = inline_element(fc, x, lay, FT, n, idx)
+            convert_repr(fc, field_storage(FT) === FieldPointer ? boxed(FT, v) : inline(FT, v), rt)
+        end
+    elseif x.kind === Boxed
+        ismutabletype(T) && T.name.atomicfields != C_NULL && return nothing
+        storage = [field_storage(T, i) for i in 1:n]
+        if all(==(FieldPointer), storage)
+            lowered = fc -> begin
+                p = LLVM.inbounds_gep!(b, T_tracked(), derived(fc, x.V), [LLVM.sub!(b, idx.V, iptr(fc, 1))])
+                v = tbaa!(fc, LLVM.load!(b, T_tracked(), p; align=config(fc).target.pointer_size), field_tbaa(fc, T))
+                any(i -> maybe_undef_field(T, i), 1:n) && undef_check!(fc, v)
+                convert_repr(fc, boxed(Union{types...}, v), rt)
+            end
+        elseif same && all(==(FieldInline), storage) &&
+               !(has_references(FT) && any(i -> maybe_undef_field(T, i), 1:n))
+            stride = fieldoffset(T, 2) - fieldoffset(T, 1)
+            lowered = fc -> begin
+                off = LLVM.mul!(b, LLVM.sub!(b, idx.V, iptr(fc, 1)), iptr(fc, stride))
+                p = LLVM.inbounds_gep!(b, LLVM.Int8Type(), derived(fc, x.V), [off])
+                v = LLVM.load!(b, value_type(fc, FT), p; align=field_alignment(fc, T, FT))
+                convert_repr(fc, inline(FT, tbaa!(fc, v, field_tbaa(fc, T))), rt)
+            end
+        else
+            return nothing
+        end
+    else
+        return nothing
+    end
+    bounds_check!(fc, LLVM.sub!(b, idx.V, iptr(fc, 1)), iptr(fc, n), bc, x, idx)
+    return lowered(fc)
+end
+
+# the element `idx` (1-based, in bounds) of the inline homogeneous tuple `x` with the
+# layout `lay` (an LLVM array or vector of `n` elements of type `FT`, or of references to
+# them): extracted from a vector, selected among a few elements or ones with references,
+# or loaded from memory
+# (for a constant, a private global, as native code's `value_to_pointer`)
+function inline_element(fc::FnCtx, x::CGVal, lay::Layout, @nospecialize(FT), n::Int, idx::CGVal)
+    b = fc.builder
+    i0 = LLVM.sub!(b, idx.V, iptr(fc, 1))
+    if lay.llvm isa LLVM.VectorType
+        return LLVM.extract_element!(b, x.V, LLVM.trunc!(b, i0, LLVM.Int32Type()))
+    elseif n <= 3 || field_storage(FT) === FieldPointer || has_references(FT)
+        v = LLVM.extract_value!(b, x.V, 0)
+        for i in 1:n-1
+            c = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, i0, iptr(fc, i))
+            v = LLVM.select!(b, c, LLVM.extract_value!(b, x.V, i), v)
+        end
+        return v
+    end
+    align = Base.datatype_alignment(x.typ)
+    if isconstant(x) && x.V isa LLVM.Constant
+        mem = LLVM.GlobalVariable(fc.cgm.mod, lay.llvm, unique_name(fc.cgm, "_j_const"))
+        LLVM.initializer!(mem, x.V)
+        LLVM.constant!(mem, true)
+        LLVM.linkage!(mem, LLVM.API.LLVMPrivateLinkage)
+        LLVM.unnamed_addr!(mem, LLVM.API.LLVMGlobalUnnamedAddr)
+        LLVM.alignment!(mem, align)
+        tb = :const
+    else
+        mem = entry_alloca!(fc, lay.llvm; align)
+        tbaa!(fc, LLVM.store!(b, x.V, mem), :stack)
+        tb = :stack
+    end
+    et = LLVM.element_type(lay.llvm)
+    p = LLVM.inbounds_gep!(b, et, mem, [i0])
+    return tbaa!(fc, LLVM.load!(b, et, p; align=Base.datatype_alignment(FT)), tb)
 end
 
 # `setfield!(x, f, v, [order])` of a non-atomic field
