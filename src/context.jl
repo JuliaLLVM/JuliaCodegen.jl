@@ -5,8 +5,9 @@
 
 An LLVM function emitted for a `MethodInstance`, in JuliaCodegen's internal calling
 convention: ghost arguments are dropped, the others are passed in their representation
-(inline values by value, boxed ones as tracked pointers, unboxed unions as their union
-type), and the result is returned in the representation of the inferred return type
+(inline values by value, but aggregates without references by reference to memory that
+doesn't change, `ptr addrspace(11)`, as native code's specsig convention; boxed ones as
+tracked pointers, unboxed unions as their union type), and the result is returned in the representation of the inferred return type
 (`void` for ghosts and `Union{}`).
 """
 struct FuncInfo

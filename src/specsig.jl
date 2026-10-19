@@ -177,21 +177,14 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
             v = ps[p]
             p += 1
             cv = if k === SpecByRef
-                ld = LLVM.load!(b, layout(fc, T).llvm, v)
-                LLVM.alignment!(ld, Base.datatype_alignment(T))
-                inline(T, tbaa!(fc, ld, :const))
+                byref_argument(fc, T, v)
             else
                 CGVal(T, k === SpecBoxed ? Boxed : Inline, v, nothing, nothing)
             end
             push!(args, cv)
         end
         isva && (args = pack_varargs(fc, info.mi, args))
-        ops = LLVM.Value[]
-        for (a, T) in zip(args, info.argtypes)
-            repr_kind(T) === Ghost && continue
-            push!(ops, convert_repr(fc, a, T).V)
-        end
-        r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, ops)
+        r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, call_operands(fc, info, args))
         # (the entry is the function, as native code's: inlined by any pipeline)
         push!(LLVM.function_attributes(r), LLVM.EnumAttribute("alwaysinline"))
         if sig.ret === :sret
@@ -234,9 +227,7 @@ function emit_specsig_call!(fc::FnCtx, sig::SpecSig, callee::LLVM.Value, args::V
         elseif k === SpecValue
             push!(ops, convert_repr(fc, a, T).V)
         else
-            arg = entry_alloca!(fc, layout(fc, T).llvm; align=Base.datatype_alignment(T))
-            tbaa!(fc, LLVM.store!(b, convert_repr(fc, a, T).V, arg), :stack)
-            push!(ops, LLVM.addrspacecast!(b, arg, T_derived()))
+            push!(ops, byref_operand(fc, convert_repr(fc, a, T), T))
         end
     end
     r = LLVM.call!(b, sig.ft, callee, ops)

@@ -158,13 +158,29 @@ end
     for (f, types) in ((b_fields, (BPoint,)), (b_new_point, (Float64, Float64)),
                        (b_new_mutable, (Int, Any, BRef)), (b_mutable_set!, (BMutable, Int, Any, BRef)),
                        (b_egal, (BPoint, BPoint)), (b_egal, (Symbol, Symbol)),
-                       (b_isa_int, (Int,)), (b_tuple, (Int, String)), (b_sizeof, (String,)),
-                       (b_dynamic_inbounds, (NTuple{2,Int}, Int)), (b_dynamic_inbounds, (NTuple{4,Float32}, Int)),
-                       (b_dynamic_inbounds, (NTuple{4,String}, Int)))
+                       (b_isa_int, (Int,)), (b_tuple, (Int, String)), (b_sizeof, (String,)))
         @test @filecheck begin
             @check_not "julia.call"
             print(test_ir(f, types))
         end
+    end
+    # (unless --check-bounds=yes checks bounds in `@inbounds` too, throwing through a call)
+    if Base.JLOptions().check_bounds != 1
+        for types in ((NTuple{2,Int}, Int), (NTuple{4,Float32}, Int), (NTuple{4,String}, Int))
+            @test @filecheck begin
+                @check_not "julia.call"
+                print(test_ir(b_dynamic_inbounds, types))
+            end
+        end
+    end
+    # an inline argument indexed at run time is read where it is, from the memory it is
+    # passed in
+    @test @filecheck begin
+        @check_label "define internal float @julia_b_dynamic_inbounds"
+        @check "ptr addrspace(11)"
+        @check_not "alloca"
+        @check "getelementptr inbounds float, ptr addrspace(11)"
+        print(test_ir(b_dynamic_inbounds, (NTuple{8,Float32}, Int)))
     end
     # a write barrier for each reference stored into an object
     ir = test_ir(b_mutable_set!, (BMutable, Int, Any, BRef))

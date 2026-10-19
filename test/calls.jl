@@ -68,7 +68,7 @@ end
     # signature has a `Vararg` (as inference keeps two or more varargs here): through the
     # runtime, with the arguments one by one
     ir = test_ir(c_call_vararg2, (Int,))
-    @test occursin(r"call i64 @julia_c_vararg2_\d+\(i64 %\d+, \[1 x i64\]", ir)
+    @test occursin(r"call i64 @julia_c_vararg2_\d+\(i64 %\d+, ptr addrspace\(11\)", ir)
     @test occursin("@ijl_invoke", ir)
     # a varargs entry
     @cgtest c_vararg2(1, 2, 3)

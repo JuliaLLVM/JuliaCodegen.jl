@@ -31,20 +31,86 @@ Declare the function of `mi` in JuliaCodegen's internal convention (see
 function declare_function!(cgm::CGModule, mi::Core.MethodInstance, argtypes::Vector{Any},
                            @nospecialize(rettype))
     params = LLVM.LLVMType[]
+    attrs = Vector{LLVM.Attribute}[]
     for T in argtypes
         t = value_type(cgm.layouts, T)
-        t === nothing || push!(params, t)
+        t === nothing && continue
+        if byref(cgm, T)
+            push!(params, T_derived())
+            push!(attrs, LLVM.Attribute[attr("readonly"), ref_attributes(T)...])
+        else
+            push!(params, t)
+            push!(attrs, LLVM.Attribute[])
+        end
     end
     ret = something(value_type(cgm.layouts, rettype), LLVM.VoidType())
     f = mi.def isa Method ? mi.specTypes.parameters[1] : nothing
     fobj = f isa DataType && isdefined(f, :instance) ? f.instance : nothing
     llvmf = LLVM.Function(cgm.mod, unique_name(cgm, "julia", fobj), LLVM.FunctionType(ret, params))
+    for (i, as) in enumerate(attrs), a in as
+        push!(LLVM.parameter_attributes(llvmf)[i], a)
+    end
     LLVM.linkage!(llvmf, LLVM.API.LLVMInternalLinkage)
     init_function!(llvmf, cgm.config.target)
     rettype === Union{} && push!(llvmf.function_attributes, LLVM.EnumAttribute("noreturn"))
     info = FuncInfo(mi, llvmf, argtypes, rettype)
     cgm.funcs[mi] = info
     return info
+end
+
+"""
+    JuliaCodegen.byref(cgm, T) -> Bool
+
+Whether functions take arguments of the inline type `T` by reference (see
+[`FuncInfo`](@ref JuliaCodegen.FuncInfo)): aggregates without references.
+"""
+byref(cgm::CGModule, @nospecialize(T)) =
+    repr_kind(T) === Inline && !has_references(T) && is_aggregate(layout(cgm.layouts, T).llvm)
+
+# the operand that passes the inline value `v` of type `T` by reference: the memory it
+# was loaded from, a constant global for a constant, or a stack slot
+function byref_operand(fc::FnCtx, v::CGVal, @nospecialize(T))
+    v.mem === nothing || return derived(fc, v.mem)
+    lay = layout(fc, T)
+    mem = if isconstant(v) && v.V isa LLVM.Constant
+        constant_memory!(fc.cgm, v.V, Base.datatype_alignment(T))
+    else
+        slot = entry_alloca!(fc, lay.llvm; align=Base.datatype_alignment(T))
+        st = LLVM.store!(fc.builder, v.V, slot)
+        LLVM.alignment!(st, Base.datatype_alignment(T))
+        tbaa!(fc, st, :stack)
+        slot
+    end
+    return derived(fc, mem)
+end
+
+# a private constant global with the value `c` (native code's `get_pointer_to_constant`)
+function constant_memory!(cgm::CGModule, c::LLVM.Constant, align::Integer)
+    gv = LLVM.GlobalVariable(cgm.mod, LLVM.value_type(c), unique_name(cgm, "_j_const"))
+    LLVM.initializer!(gv, c)
+    LLVM.constant!(gv, true)
+    LLVM.linkage!(gv, LLVM.API.LLVMPrivateLinkage)
+    LLVM.unnamed_addr!(gv, LLVM.API.LLVMGlobalUnnamedAddr)
+    LLVM.alignment!(gv, align)
+    return gv
+end
+
+# the operands of a call of the function `info` with the values `args`
+function call_operands(fc::FnCtx, info::FuncInfo, args::Vector{CGVal})
+    ops = LLVM.Value[]
+    for (a, T) in zip(args, info.argtypes)
+        v = convert_repr(fc, a, T)
+        v.kind === Ghost && continue
+        push!(ops, byref(fc.cgm, T) ? byref_operand(fc, v, T) : v.V)
+    end
+    return ops
+end
+
+# a reference argument of type `T`: its value, loaded, and the memory
+function byref_argument(fc::FnCtx, @nospecialize(T), p::LLVM.Value)
+    ld = LLVM.load!(fc.builder, layout(fc, T).llvm, p)
+    LLVM.alignment!(ld, Base.datatype_alignment(T))
+    return inline(T, tbaa!(fc, ld, :const); mem=p)
 end
 
 "The Julia argument types of the function of `mi`, from its signature."
@@ -120,7 +186,8 @@ function bind_arguments!(fc::FnCtx)
         if repr_kind(T) === Ghost
             push!(fc.args, ghost(T, something(ghost_value(T))))
         else
-            push!(fc.args, CGVal(T, repr_kind(T), params[p], nothing, nothing))
+            push!(fc.args, byref(fc.cgm, T) ? byref_argument(fc, T, params[p]) :
+                           CGVal(T, repr_kind(T), params[p], nothing, nothing))
             p += 1
         end
     end
@@ -387,12 +454,7 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
         elseif m isa Method && m.isva
             args = pack_varargs(fc, info.mi, args)
         end
-        ops = LLVM.Value[]
-        for (a, T) in zip(args, info.argtypes)
-            repr_kind(T) === Ghost && continue
-            push!(ops, convert_repr(fc, a, T).V)
-        end
-        r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, ops)
+        r = LLVM.call!(b, LLVM.function_type(info.llvmf), info.llvmf, call_operands(fc, info, args))
         # (the entry is the function, as native code's: inlined by any pipeline)
         push!(LLVM.function_attributes(r), LLVM.EnumAttribute("alwaysinline"))
         rt = info.rettype
@@ -528,12 +590,7 @@ end
 Call the function `info` with the values `args` (converted to its argument types).
 """
 function emit_call_info(fc::FnCtx, info::FuncInfo, args::Vector{CGVal})
-    ops = LLVM.Value[]
-    for (a, T) in zip(args, info.argtypes)
-        v = convert_repr(fc, a, T)
-        v.kind === Ghost || push!(ops, v.V)
-    end
-    r = LLVM.call!(fc.builder, LLVM.function_type(info.llvmf), info.llvmf, ops)
+    r = LLVM.call!(fc.builder, LLVM.function_type(info.llvmf), info.llvmf, call_operands(fc, info, args))
     rt = info.rettype
     k = repr_kind(rt)
     k === Bottom && return emit_unreachable!(fc)

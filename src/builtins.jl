@@ -513,8 +513,8 @@ end
 # the element `idx` (1-based, in bounds) of the inline homogeneous tuple `x` with the
 # layout `lay` (an LLVM array or vector of `n` elements of type `FT`, or of references to
 # them): extracted from a vector, selected among a few elements or ones with references,
-# or loaded from memory
-# (for a constant, a private global, as native code's `value_to_pointer`)
+# or loaded from memory (the memory it was loaded from; for a constant, a private global,
+# as native code's `value_to_pointer`; or a stack slot)
 function inline_element(fc::FnCtx, x::CGVal, lay::Layout, @nospecialize(FT), n::Int, idx::CGVal)
     b = fc.builder
     i0 = LLVM.sub!(b, idx.V, iptr(fc, 1))
@@ -529,18 +529,13 @@ function inline_element(fc::FnCtx, x::CGVal, lay::Layout, @nospecialize(FT), n::
         return v
     end
     align = Base.datatype_alignment(x.typ)
-    if isconstant(x) && x.V isa LLVM.Constant
-        mem = LLVM.GlobalVariable(fc.cgm.mod, lay.llvm, unique_name(fc.cgm, "_j_const"))
-        LLVM.initializer!(mem, x.V)
-        LLVM.constant!(mem, true)
-        LLVM.linkage!(mem, LLVM.API.LLVMPrivateLinkage)
-        LLVM.unnamed_addr!(mem, LLVM.API.LLVMGlobalUnnamedAddr)
-        LLVM.alignment!(mem, align)
-        tb = :const
+    if x.mem !== nothing
+        mem, tb = x.mem, :const
+    elseif isconstant(x) && x.V isa LLVM.Constant
+        mem, tb = constant_memory!(fc.cgm, x.V, align), :const
     else
-        mem = entry_alloca!(fc, lay.llvm; align)
+        mem, tb = entry_alloca!(fc, lay.llvm; align), :stack
         tbaa!(fc, LLVM.store!(b, x.V, mem), :stack)
-        tb = :stack
     end
     et = LLVM.element_type(lay.llvm)
     p = LLVM.inbounds_gep!(b, et, mem, [i0])
