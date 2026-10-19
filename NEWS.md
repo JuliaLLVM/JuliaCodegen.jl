@@ -33,3 +33,7 @@
   (recursion included); callees that always throw, varargs methods (for now), and
   callees with unsupported constructs call their native code (`cgm.fallbacks` says why),
   unless the configuration says to throw.
+- The memory builtins (`memorynew`, `memoryrefnew`, `memoryrefget`, `memoryrefset!`,
+  `memoryrefunset!`, `memoryrefoffset`) for elements stored inline, as references and as
+  isbits unions, with bounds checks, `julia.gc_loaded`, the owner's write barrier, and the
+  dialect's TBAA; array loops make no dynamic calls.

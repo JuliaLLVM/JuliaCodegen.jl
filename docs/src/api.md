@@ -142,6 +142,8 @@ JuliaCodegen.emit_store_field!
 JuliaCodegen.field_address
 JuliaCodegen.maybe_undef_field
 JuliaCodegen.runtime_global
+JuliaCodegen.memory_elements
+JuliaCodegen.emit_gc_loaded
 ```
 
 ## Unboxed unions

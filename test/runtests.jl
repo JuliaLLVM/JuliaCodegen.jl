@@ -20,6 +20,7 @@ include("intrinsics.jl")
 include("builtins.jl")
 include("unions.jl")
 include("calls.jl")
+include("memory.jl")
 
 @testset "Aqua" begin
     using Aqua

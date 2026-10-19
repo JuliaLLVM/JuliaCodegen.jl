@@ -448,6 +448,12 @@ function emit_sizeof(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     if x.typ === String && x.kind === Boxed
         len = LLVM.load!(fc.builder, iptr_type(fc), derived(fc, x.V); align=config(fc).target.pointer_size)
         return inline(Int, tbaa!(fc, len, :const))
+    elseif x.typ isa DataType && x.typ <: GenericMemory && isconcretetype(x.typ) && x.kind === Boxed
+        # the length times the size of an element (and its selector byte for unions)
+        el = memory_elements(GenericMemoryRef{x.typ.parameters...})
+        el === nothing && return nothing
+        elsz = memory_elsize(GenericMemoryRef{x.typ.parameters...}) + (el[1] === :union ? 1 : 0)
+        return inline(Int, LLVM.mul!(fc.builder, memory_length(fc, x.V), iptr(fc, elsz)))
     elseif x.typ isa DataType && isbitstype(x.typ)
         return const_value(fc, sizeof(x.typ))
     end
