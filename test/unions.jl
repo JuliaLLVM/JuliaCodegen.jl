@@ -101,7 +101,7 @@ end
     @test @filecheck begin
         @check_label "define internal"
         @check_not "julia.gc_alloc_obj"
-        @check_label "define ptr addrspace(10) @jctest_entry"
+        @check_label "define nonnull ptr addrspace(10) @jctest_entry"
         print(test_ir(u_maybe, (Bool, Int)))
     end
     @test @filecheck begin

@@ -97,7 +97,7 @@ end
         @check "define internal i64 @julia_c_fib_[[N:[0-9]+]]("
         @check "call i64 @julia_c_fib_[[N]]("
         @check_not "julia.call"
-        @check "define ptr addrspace(10) @jctest_entry"
+        @check "define nonnull ptr addrspace(10) @jctest_entry"
         print(test_ir(c_fib, (Int,)))
     end
     # a union-returning callee is called directly, with the union by value

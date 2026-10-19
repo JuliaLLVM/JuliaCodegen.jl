@@ -408,6 +408,10 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
     ft = LLVM.FunctionType(T_tracked(), [T_tracked(), T_ptr(), LLVM.Int32Type()])
     f = LLVM.Function(cgm.mod, String(name), ft)
     init_function!(f, cgm.config.target)
+    # (as native code's)
+    push!(f.return_attributes, attr("nonnull"))
+    foreach(a -> push!(f.parameter_attributes[2], a),
+            (attr("noalias"), nocapture(), attr("noundef"), attr("readonly")))
     @dispose b=LLVM.IRBuilder() begin
         top = LLVM.BasicBlock(f, "top")
         LLVM.position!(b, LLVM.at_end(top))
