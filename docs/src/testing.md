@@ -53,6 +53,15 @@ that JuliaCodegen emits. The tests compare JuliaCodegen's declarations of the in
 (types and attributes), the function prologue and the TBAA tree with those of the
 running Julia's code generator.
 
+## The C ABI
+
+`test/cabi_targets.jl` emits the C signatures of 121 `ccall`s (scalars of every width,
+structs of 1 to 72 bytes, homogeneous aggregates, vectors, register exhaustion, variadic
+calls) for ten targets, with `test_module_ir(f, types; triple)`, and compares them with
+`test/cabi_targets.txt` and, when clang is installed, with clang's declarations of the
+same C functions (up to the known differences listed there, where native Julia's ABI
+differs from clang's). Set `JULIACODEGEN_CABI_REGEN=1` to rewrite the table.
+
 ## Unreleased dependencies
 
 JuliaIR.jl and the LLVM.jl changes it needs are not released yet: `Project.toml` and

@@ -111,3 +111,19 @@ test_ir(@nospecialize(f), @nospecialize(types)) =
 "The functions that call native code in what JuliaCodegen generates for `f(::types...)`."
 test_fallbacks(@nospecialize(f), @nospecialize(types); config=test_config()) =
     test_compile(Tuple{Core.Typeof(f), types...}; config).fallbacks
+
+"""
+    test_module_ir(f, types; triple) -> String
+
+The (unoptimized) module that JuliaCodegen generates for `f(::types...)` for the target
+`triple`, which need not be the host's: the code is not run.
+"""
+function test_module_ir(@nospecialize(f), @nospecialize(types); triple::AbstractString)
+    config = JuliaCodegen.CodegenConfig(; target=JuliaCodegen.Target(; triple),
+                                        on_unsupported=:error, on_internal_error=:error)
+    @dispose ctx=LLVM.Context() mod=LLVM.Module("jctarget") begin
+        cgm = JuliaCodegen.CGModule(mod, config)
+        JuliaCodegen.emit_entry!(cgm, Tuple{Core.Typeof(f), types...})
+        return string(mod)
+    end
+end

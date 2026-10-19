@@ -37,3 +37,8 @@
   `memoryrefunset!`, `memoryrefoffset`) for elements stored inline, as references and as
   isbits unions, with bounds checks, `julia.gc_loaded`, the owner's write barrier, and the
   dialect's TBAA; array loops make no dynamic calls.
+- `ccall` in the C ABI of the target (the platform ABIs of Julia's `abi_*.cpp`):
+  scalars, aggregates by value (`byval`, `sret`), `Ref` and object arguments, variadic
+  calls, `gc_safe` calls, runtime function pointers; relocatable symbol references (by
+  name, or looked up on first use); `cglobal`; `GC.@preserve`; and the runtime functions
+  native code emits inline.

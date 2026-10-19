@@ -61,6 +61,10 @@ end
 ## walker hooks
 
 function emit_call!(fc::FnCtx, f::CGVal, ex::Expr, @nospecialize(typ))
+    # `cglobal(target, T)` up to Julia 1.13: the target is an expression
+    if isconstant(f) && constant_value(f) === Core.Intrinsics.cglobal && length(ex.args) >= 2
+        return emit_cglobal(fc, ex.args[2], typ)
+    end
     args = CGVal[operand(fc, a) for a in ex.args[2:end]]
     # a call that inference found to throw (e.g. of an intrinsic with the wrong number of
     # arguments) goes to the runtime, which throws the error

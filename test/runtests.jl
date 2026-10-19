@@ -2,6 +2,7 @@ using Test
 using JuliaCodegen
 using FileCheck
 using InteractiveUtils
+import Libdl
 
 include("testhelpers.jl")
 include("factprobe.jl")
@@ -21,6 +22,8 @@ include("builtins.jl")
 include("unions.jl")
 include("calls.jl")
 include("memory.jl")
+include("ccall.jl")
+include("cabi_targets.jl")
 
 @testset "Aqua" begin
     using Aqua

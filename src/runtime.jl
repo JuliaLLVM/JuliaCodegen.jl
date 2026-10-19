@@ -24,6 +24,12 @@ function declare_runtime(mod::LLVM.Module, dialect::JuliaIR.Dialect, name::Symbo
                   LLVM.EnumAttribute("noundef"))
             push!(f.parameter_attributes[2], a)
         end
+    elseif name === :jl_load_and_lookup
+        # `void *(const char *lib, const char *sym, void **handle)`
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(T_ptr(), [T_ptr(), T_ptr(), T_ptr()]))
+    elseif name === :jl_lazy_load_and_lookup
+        # `void *(jl_value_t *lib, const char *sym)`
+        f = LLVM.Function(mod, sym, LLVM.FunctionType(T_ptr(), [T_tracked(), T_tracked()]))
     elseif name === :jl_alloc_genericmemory
         f = LLVM.Function(mod, sym, LLVM.FunctionType(T_tracked(), [T_tracked(), LLVM.Int64Type()]))
     elseif name === :jl_throw
