@@ -404,7 +404,7 @@ function llvmcall_type(fc::FnCtx, @nospecialize T)
     ty = value_type(fc, T)
     # (llvmcall passes structs other than tuples as LLVM structs)
     if ty isa LLVM.ArrayType && !(T <: Tuple)
-        return LLVM.StructType(fill(LLVM.eltype(ty), Int(length(ty))))
+        return LLVM.StructType(fill(ty.element_type, Int(length(ty))))
     end
     return ty
 end

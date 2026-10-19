@@ -102,7 +102,7 @@ function llvm_constant(fc::FnCtx, @nospecialize(x), @nospecialize(T))
     end
     lay.mode === Unwrap && return elements[1]
     lay.mode === VectorLayout && return LLVM.ConstantVector(elements)
-    ty isa LLVM.ArrayType && return LLVM.ConstantArray(LLVM.eltype(ty), elements)
+    ty isa LLVM.ArrayType && return LLVM.ConstantArray(ty.element_type, elements)
     return LLVM.ConstantStruct(ty, elements)
 end
 

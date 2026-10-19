@@ -178,7 +178,7 @@ undef_value(ty::LLVM.LLVMType) = has_tracked_pointers(ty) ? LLVM.null(ty) : LLVM
 function has_tracked_pointers(ty::LLVM.LLVMType)
     ty isa LLVM.PointerType && return AddrSpace.Tracked <= LLVM.addrspace(ty) <= AddrSpace.Loaded
     ty isa LLVM.StructType && return any(has_tracked_pointers, LLVM.elements(ty))
-    (ty isa LLVM.ArrayType || ty isa LLVM.VectorType) && return has_tracked_pointers(LLVM.eltype(ty))
+    (ty isa LLVM.ArrayType || ty isa LLVM.VectorType) && return has_tracked_pointers(ty.element_type)
     return false
 end
 

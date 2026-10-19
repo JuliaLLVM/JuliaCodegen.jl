@@ -22,3 +22,7 @@
   checked arithmetic and division, pointers, atomics, fences, `llvmcall`), and calls
   through the runtime for everything else: dynamic dispatch for `:call`s, `jl_invoke`
   for `:invoke`s.
+- Builtins: `===` (as native code: identity, contents, `jl_egal__unboxed`), `isa`,
+  `typeassert`, `typeof`, `new` (inline values and objects), `getfield` and `setfield!`
+  (with undefined-field checks and write barriers), `tuple`, `ifelse`, `isdefined`,
+  `throw`, `sizeof`, constant `getglobal`, and constant folding.

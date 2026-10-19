@@ -42,12 +42,22 @@ declaration(f::LLVM.Function) =
         append!(expected, ["julia.field_write_barrier.p11", "julia.field_write_barrier.p13"])
     @test issubset(expected, keys(native))
 
-    # the runtime functions, as native code declares them
+    # the runtime functions and globals, as native code declares them
     @dispose ctx=Context() begin
-        ir = native_module_ir((f, x) -> f(x), Tuple{Any,Any})
-        @dispose nmod=parse(LLVM.Module, ir) mod=LLVM.Module("ours") begin
-            nf = nmod.functions["ijl_apply_generic"]
-            @test declaration(JC.declare_runtime(mod, :jl_apply_generic)) == declaration(nf)
+        for (name, f, tt) in [(:jl_apply_generic, (f, x) -> f(x), Tuple{Any,Any}),
+                              (:jl_throw, x -> throw(x), Tuple{Any}),
+                              (:jl_subtype, x -> x isa Integer, Tuple{Any}),
+                              (:jl_egal__unboxed, (x, y) -> x === y, Tuple{Any,Any})]
+            @dispose nmod=parse(LLVM.Module, native_module_ir(f, tt)) mod=LLVM.Module("ours") begin
+                nf = nmod.functions[JC.runtime_symbol(name)]
+                @test declaration(JC.declare_runtime(mod, dialect, name)) == declaration(nf)
+            end
+        end
+        @dispose nmod=parse(LLVM.Module, native_module_ir(x -> typeof(x), Tuple{Any})) mod=LLVM.Module("ours") begin
+            ng = LLVM.globals(nmod)["jl_small_typeof"]
+            g = JC.runtime_global(mod, :jl_small_typeof, LLVM.Int8Type())
+            @test g.global_value_type == ng.global_value_type
+            @test g.constant == ng.constant
         end
     end
 

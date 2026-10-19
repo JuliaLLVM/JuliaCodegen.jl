@@ -122,17 +122,27 @@ function call_op!(b::LLVM.IRBuilder, mod::LLVM.Module, dialect::JuliaIR.Dialect,
 end
 
 """
-    JuliaCodegen.write_barrier!(b, mod, dialect, parent, field, value)
+    JuliaCodegen.write_barrier!(b, mod, dialect, parent, fields, values)
 
-The write barrier for storing the object `value` into the field at `field` (a pointer
+The write barrier for storing the objects `values` into the fields at `fields` (pointers
 into `parent`, in address space 11 or 13) of the object `parent`: the object form
-(`julia.write_barrier(parent, value)`) or the field form of the dialect.
+(`julia.write_barrier(parent, values...)`) or the field form of the dialect, with the
+pairs of field and value.
 """
 function write_barrier!(b::LLVM.IRBuilder, mod::LLVM.Module, dialect::JuliaIR.Dialect,
-                        parent::LLVM.Value, field::LLVM.Value, value::LLVM.Value)
+                        parent::LLVM.Value, fields::Vector{<:LLVM.Value},
+                        values::Vector{<:LLVM.Value})
     if dialect.barrier_flavour === :write_barrier
-        return call_op!(b, mod, dialect, "julia.write_barrier", parent, value)
+        return call_op!(b, mod, dialect, "julia.write_barrier", parent, values...)
     end
-    as = LLVM.addrspace(LLVM.value_type(field))
-    return call_op!(b, mod, dialect, "julia.field_write_barrier.p$as", parent, field, value)
+    as = LLVM.addrspace(LLVM.value_type(first(fields)))
+    args = LLVM.Value[]
+    for (f, v) in zip(fields, values)
+        push!(args, f, v)
+    end
+    return call_op!(b, mod, dialect, "julia.field_write_barrier.p$as", parent, args...)
 end
+
+write_barrier!(b::LLVM.IRBuilder, mod::LLVM.Module, dialect::JuliaIR.Dialect,
+               parent::LLVM.Value, field::LLVM.Value, value::LLVM.Value) =
+    write_barrier!(b, mod, dialect, parent, [field], [value])

@@ -122,6 +122,24 @@ JuliaCodegen.declare_runtime
 JuliaCodegen.runtime_function
 ```
 
+## Builtins
+
+```@docs
+JuliaCodegen.emit_builtin
+JuliaCodegen.emit_egal
+JuliaCodegen.emit_f_is
+JuliaCodegen.emit_isa
+JuliaCodegen.emit_tag
+JuliaCodegen.tag_constant
+JuliaCodegen.typeof_box
+JuliaCodegen.emit_if
+JuliaCodegen.emit_new
+JuliaCodegen.emit_store_field!
+JuliaCodegen.field_address
+JuliaCodegen.maybe_undef_field
+JuliaCodegen.runtime_global
+```
+
 ## Targets
 
 ```@docs
