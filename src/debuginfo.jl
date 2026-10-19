@@ -82,7 +82,8 @@ frame_name(@nospecialize(m)) =
     JuliaCodegen.debug_function!(fc, f; name, file, line)
 
 Give the function `f` that `fc` emits a subprogram (`name` at `file:line`, by default
-those of the method being compiled), and the builder its location, for the instructions
+those of the method being compiled; with the linkage name `cgm.debug_linkage[f]`, if any,
+else the function's), and the builder its location, for the instructions
 emitted before the first statement and in functions without IR (entries, stubs).
 """
 function debug_function!(fc::FnCtx, f::LLVM.Function; name=nothing, file=nothing, line=nothing)
@@ -92,7 +93,7 @@ function debug_function!(fc::FnCtx, f::LLVM.Function; name=nothing, file=nothing
     name = something(name, frame_name(m))
     file = something(file, m isa Method ? m.file : :none)
     line = something(line, m isa Method ? m.line : 0)
-    sp = subprogram!(di, name, file, line, LLVM.name(f))
+    sp = subprogram!(di, name, file, line, get(fc.cgm.debug_linkage, f, LLVM.name(f)))
     f.subprogram = sp
     fc.subprogram = sp
     LLVM.debug_location!(fc.builder, LLVM.DILocation(max(Int(line), 0), 0, sp))
@@ -107,6 +108,7 @@ function statement_location!(fc::FnCtx, idx::Int)
     frames = Base.IRShow.buildLineInfoNode(fc.ir.debuginfo, fc.info.mi, idx)
     isempty(frames) && return    # (keep the previous location)
     loc = nothing
+    n = length(frames)
     for (k, fr) in enumerate(frames)
         scope = if k == 1
             fc.subprogram
@@ -116,7 +118,9 @@ function statement_location!(fc::FnCtx, idx::Int)
                 subprogram!(di, name, fr.file, 0)
             end
         end
-        loc = LLVM.DILocation(max(Int(fr.line), 0), 0, scope, loc)
+        # (the column of the innermost location is the statement, as native code encodes it
+        # from Julia 1.14 on: tools map errors in the LLVM IR back to the Julia IR by it)
+        loc = LLVM.DILocation(max(Int(fr.line), 0), k == n ? idx : 0, scope, loc)
     end
     LLVM.debug_location!(fc.builder, loc)
 end

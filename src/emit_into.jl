@@ -78,7 +78,10 @@ end
 function emit_sources!(cgm::CGModule, codeinfos, sources)
     infos = Pair{Core.CodeInstance,FuncInfo}[]
     for (ci, _) in codeinfos
-        push!(infos, ci => get_function!(cgm, CC.get_ci_mi(ci)))
+        info = get_function!(cgm, CC.get_ci_mi(ci))
+        push!(infos, ci => info)
+        # (debug information names a function by its specsig entry, as tools look it up)
+        cgm.debug_linkage[info.llvmf] = "j_" * chopprefix(LLVM.name(info.llvmf), "julia_")
     end
     process_worklist!(cgm)
     compiled = IdDict{Core.CodeInstance,CompiledFunctions}()

@@ -61,6 +61,8 @@ mutable struct CGModule
     throwing_stubs::Bool
     "The debug information (a `DebugInfo`), created on first use."
     debuginfo::Any
+    "The linkage names of the subprograms of functions, if not the functions' names."
+    debug_linkage::IdDict{LLVM.Function,String}
     counter::Int
 end
 
@@ -71,7 +73,7 @@ function CGModule(mod::LLVM.Module, config::CodegenConfig; world::UInt=Base.get_
     return CGModule(mod, config, world, Layouts(config), TBAA(config.dialect),
                     IdDict{Core.MethodInstance,FuncInfo}(), Tuple{FuncInfo,Any}[],
                     IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], Entry[], ir_source,
-                    throwing_stubs, nothing, 0)
+                    throwing_stubs, nothing, IdDict{LLVM.Function,String}(), 0)
 end
 
 "A name that is unique in the module, from `prefix` and the function `f` (if any)."

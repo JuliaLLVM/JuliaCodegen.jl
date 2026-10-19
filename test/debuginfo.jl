@@ -34,6 +34,8 @@ end
     # the lines of the functions inlined into a statement: inlined frames
     @test occursin(r"!DILocation\(line: \d+, scope: ![0-9]+, inlinedAt: ![0-9]+\)", ir)
     @test occursin("!DISubprogram(name: \"sin\"", ir) || occursin("!DISubprogram(name: \"+\"", ir)
+    # the innermost location's column is the statement (as native code from Julia 1.14 on)
+    @test occursin(r"!DILocation\(line: \d+, column: [1-9]\d*, scope: ", ir)
     # every function has a subprogram, entries included
     @test count("distinct !DISubprogram(name: \"d_outer\"", ir) == 2
     # without, none
