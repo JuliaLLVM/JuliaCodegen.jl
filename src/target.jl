@@ -63,13 +63,18 @@ end
 """
     JuliaCodegen.host_target() -> Target
 
-The target of Julia's JIT: the host's triple, CPU and features. On Windows, the JIT
-uses ELF objects (`FORCE_ELF` in Julia's `src/jitlayers.cpp`), which the triple says.
+The target of Julia's JIT: the host's triple, CPU and features. The triple is the
+process triple that the JIT uses (`sys::getProcessTriple()` in Julia's
+`src/jitlayers.cpp`): normalized, with Apple's name `arm64` for AArch64 on Apple
+platforms, and on Windows with ELF objects (`FORCE_ELF`).
 """
 host_target() = HOST_TARGET()
 
 const HOST_TARGET = OncePerProcess{Target}() do
-    triple = LLVM.default_triple()
+    triple = LLVM.normalize(LLVM.default_triple())
+    if Sys.isapple() && startswith(triple, "aarch64-")
+        triple = "arm64-" * chopprefix(triple, "aarch64-")
+    end
     Sys.iswindows() && !endswith(triple, "-elf") && (triple *= "-elf")
     Target(; triple, cpu=LLVM.host_cpu_name(), features=LLVM.host_cpu_features())
 end
