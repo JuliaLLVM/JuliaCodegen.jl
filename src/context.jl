@@ -34,6 +34,8 @@ mutable struct CGModule
     worklist::Vector{Tuple{FuncInfo,Any}}
     "The objects the code refers to, by the global that holds each one's address."
     literals::IdDict{Any,LLVM.GlobalVariable}
+    "The functions whose bodies call native code instead (`emit_stub!`), and why."
+    fallbacks::Vector{Pair{Core.MethodInstance,Any}}
     counter::Int
 end
 
@@ -42,7 +44,7 @@ function CGModule(mod::LLVM.Module, config::CodegenConfig; world::UInt=Base.get_
     mod.datalayout = config.target.datalayout
     return CGModule(mod, config, world, Layouts(config), TBAA(config.dialect),
                     IdDict{Core.MethodInstance,FuncInfo}(), Tuple{FuncInfo,Any}[],
-                    IdDict{Any,LLVM.GlobalVariable}(), 0)
+                    IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], 0)
 end
 
 "A name that is unique in the module, from `prefix` and the function `f` (if any)."

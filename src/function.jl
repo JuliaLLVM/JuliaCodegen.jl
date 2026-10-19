@@ -309,3 +309,111 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
     end
     return f
 end
+
+## callees
+
+"""
+    JuliaCodegen.get_function!(cgm, mi) -> FuncInfo
+
+The function of `mi` in the module, declared on first use and queued for emission: its
+body from its IR, or a stub that calls its native code (for methods that always throw,
+which are error paths, and varargs methods, for now).
+"""
+function get_function!(cgm::CGModule, mi::Core.MethodInstance)
+    info = get(cgm.funcs, mi, nothing)
+    info === nothing || return info
+    m = mi.def
+    (m isa Method) || unsupported("a call of the top-level code ", mi)
+    ir = nothing
+    rt = Any
+    reason = nothing
+    if m.isva
+        reason = "a varargs method"
+    else
+        try
+            ir, rt = get_ir(mi, cgm.world)
+        catch err
+            err isa Unsupported || rethrow()
+            reason = err
+        end
+        ir !== nothing && rt === Union{} && (reason = "a method that always throws"; ir = nothing)
+    end
+    info = declare_function!(cgm, mi, signature_argtypes(mi), ir === nothing ? Any : rt)
+    push!(cgm.worklist, (info, ir === nothing ? reason : ir))
+    return info
+end
+
+"""
+    JuliaCodegen.process_worklist!(cgm; strict)
+
+Emit the bodies of the queued functions. A function using an unsupported construct gets
+a stub that calls its native code, recorded in `cgm.fallbacks`, unless the configuration
+says to throw (`on_unsupported = :error`) or it is `strict` (the entry).
+"""
+function process_worklist!(cgm::CGModule; strict=nothing)
+    while !isempty(cgm.worklist)
+        info, ir = popfirst!(cgm.worklist)
+        if !(ir isa CC.IRCode)
+            push!(cgm.fallbacks, info.mi => ir)
+            emit_stub!(cgm, info)
+            continue
+        end
+        try
+            emit_body!(cgm, info, ir)
+        catch err
+            (info.mi === strict || !(err isa Unsupported)) && rethrow()
+            handle_failure(cgm.config, info.mi, err, catch_backtrace())
+            erase_body!(info.llvmf)
+            push!(cgm.fallbacks, info.mi => err)
+            emit_stub!(cgm, info)
+        end
+    end
+end
+
+# remove a partial body: values may be used across blocks, so detach all uses first
+function erase_body!(f::LLVM.Function)
+    for bb in LLVM.blocks(f), inst in LLVM.instructions(bb)
+        LLVM.value_type(inst) isa LLVM.VoidType ||
+            LLVM.replace_uses!(inst, LLVM.UndefValue(LLVM.value_type(inst)))
+    end
+    for bb in collect(LLVM.blocks(f))
+        LLVM.erase!(bb)
+    end
+end
+
+"""
+    JuliaCodegen.emit_stub!(cgm, info)
+
+A body for the function `info` that calls the native code of its method instance
+(`jl_invoke`), with the arguments boxed.
+"""
+function emit_stub!(cgm::CGModule, info::FuncInfo)
+    @dispose b=LLVM.IRBuilder() begin
+        top = LLVM.BasicBlock(info.llvmf, "top")
+        LLVM.position!(b, LLVM.at_end(top))
+        fc = FnCtx(cgm, info, nothing, b, top)
+        emit_prologue!(fc; safepoint=false)
+        bind_arguments!(fc)
+        r = emit_dynamic_call(fc, fc.args[1], fc.args[2:end], info.rettype; invoke=info.mi)
+        emit_return!(fc, r)
+    end
+end
+
+"""
+    JuliaCodegen.emit_call_info(fc, info, args) -> CGVal
+
+Call the function `info` with the values `args` (converted to its argument types).
+"""
+function emit_call_info(fc::FnCtx, info::FuncInfo, args::Vector{CGVal})
+    ops = LLVM.Value[]
+    for (a, T) in zip(args, info.argtypes)
+        v = convert_repr(fc, a, T)
+        v.kind === Ghost || push!(ops, v.V)
+    end
+    r = LLVM.call!(fc.builder, LLVM.function_type(info.llvmf), info.llvmf, ops)
+    rt = info.rettype
+    k = repr_kind(rt)
+    k === Bottom && return emit_unreachable!(fc)
+    k === Ghost && return ghost(rt, something(ghost_value(rt)))
+    return CGVal(rt, k, r, nothing, nothing)
+end

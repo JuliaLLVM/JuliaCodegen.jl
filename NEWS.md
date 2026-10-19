@@ -29,3 +29,7 @@
 - Unboxed unions: construction, narrowing, conversions between unions and to and from
   boxes (keeping the box a value came from), phis of unions, `isa`/`typeof`/`===` of
   union values, isbits-union fields, and conditions that may not be `Bool`.
+- Direct calls: `:invoke`s call functions emitted into the same module from their own IR
+  (recursion included); callees that always throw, varargs methods (for now), and
+  callees with unsupported constructs call their native code (`cgm.fallbacks` says why),
+  unless the configuration says to throw.
