@@ -42,6 +42,15 @@ declaration(f::LLVM.Function) =
         append!(expected, ["julia.field_write_barrier.p11", "julia.field_write_barrier.p13"])
     @test issubset(expected, keys(native))
 
+    # the runtime functions, as native code declares them
+    @dispose ctx=Context() begin
+        ir = native_module_ir((f, x) -> f(x), Tuple{Any,Any})
+        @dispose nmod=parse(LLVM.Module, ir) mod=LLVM.Module("ours") begin
+            nf = nmod.functions["ijl_apply_generic"]
+            @test declaration(JC.declare_runtime(mod, :jl_apply_generic)) == declaration(nf)
+        end
+    end
+
     @dispose ctx=Context() mod=LLVM.Module("ours") begin
         f = JC.declare_op(mod, dialect, "julia.typeof")
         @test JC.declare_op(mod, dialect, "julia.typeof") === f

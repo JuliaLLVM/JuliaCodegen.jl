@@ -115,8 +115,5 @@ end
     @test all(i -> vals[i] == WRef(i, string(i)), 1:1000)
 end
 
-@testset "unsupported" begin
-    @test_throws JuliaCodegen.Unsupported cgrun(+, 1, 2)
-end
 
 end

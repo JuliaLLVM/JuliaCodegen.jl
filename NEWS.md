@@ -18,3 +18,7 @@
 - Functions from `IRCode`: the IR walker, function bodies with control flow and phis,
   boxing and unboxing, constants (objects through globals the linker binds), and jlcall
   entry wrappers (`emit_entry!`).
+- Intrinsics (arithmetic, comparisons, conversions, shifts with Julia's semantics,
+  checked arithmetic and division, pointers, atomics, fences, `llvmcall`), and calls
+  through the runtime for everything else: dynamic dispatch for `:call`s, `jl_invoke`
+  for `:invoke`s.

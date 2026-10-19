@@ -16,6 +16,7 @@ include("facts.jl")
 include("ops.jl")
 include("repr.jl")
 include("walker.jl")
+include("intrinsics.jl")
 
 @testset "Aqua" begin
     using Aqua
