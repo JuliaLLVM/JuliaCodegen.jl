@@ -63,13 +63,15 @@ end
 """
     JuliaCodegen.host_target() -> Target
 
-The target of Julia's JIT: the host's triple, CPU and features.
+The target of Julia's JIT: the host's triple, CPU and features. On Windows, the JIT
+uses ELF objects (`FORCE_ELF` in Julia's `src/jitlayers.cpp`), which the triple says.
 """
 host_target() = HOST_TARGET()
 
 const HOST_TARGET = OncePerProcess{Target}() do
-    Target(; triple=LLVM.default_triple(), cpu=LLVM.host_cpu_name(),
-           features=LLVM.host_cpu_features())
+    triple = LLVM.default_triple()
+    Sys.iswindows() && !endswith(triple, "-elf") && (triple *= "-elf")
+    Target(; triple, cpu=LLVM.host_cpu_name(), features=LLVM.host_cpu_features())
 end
 
 """
@@ -150,12 +152,13 @@ end
 """
     JuliaCodegen.target_machine(f, target::Target; opt_level=LLVM.API.LLVMCodeGenLevelDefault)
 
-Call `f` with a JIT target machine for `target` (for the optimization pipeline, whose
+Call `f` with a target machine for `target` (for the optimization pipeline, whose
 vectorizers need its cost model), and dispose of it afterwards.
 """
 function target_machine(f, target::Target;
                         opt_level::LLVM.API.LLVMCodeGenOptLevel=LLVM.API.LLVMCodeGenLevelDefault)
     has_backend(target.triple) ||
         throw(ArgumentError("the LLVM library has no back end for $(target.triple)"))
-    LLVM.JITTargetMachine(f; target.triple, target.cpu, target.features, opt_level)
+    LLVM.TargetMachine(f, LLVM.Target(; target.triple), target.triple; target.cpu,
+                       target.features, opt_level)
 end

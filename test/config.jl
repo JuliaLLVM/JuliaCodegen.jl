@@ -38,8 +38,9 @@ end
 
     @test sprint(show, t) == "JuliaCodegen.Target(triple=\"x86_64-unknown-linux-gnu\")"
 
-    JC.target_machine(t) do tm
-        @test LLVM.triple(tm) == t.triple
+    host = JC.host_target()
+    JC.target_machine(host) do tm
+        @test LLVM.triple(tm) == host.triple
     end
     @test_throws "no back end" JC.target_machine(identity, JC.Target(; triple="bogus-unknown-unknown",
                                                            datalayout="e"))
@@ -53,8 +54,8 @@ end
     # the data layout of the modules of Julia's code generator, before RemoveNI drops
     # the non-integral address spaces
     ir = sprint(io -> code_llvm(io, +, (Int, Int); raw=true, dump_module=true, optimize=false))
-    native_dl = match(r"target datalayout = \"(.*)\"", ir)[1]
-    @test host.datalayout == native_dl
+    @test host.datalayout == match(r"target datalayout = \"(.*)\"", ir)[1]
+    @test host.triple == match(r"target triple = \"(.*)\"", ir)[1]
 end
 
 @testset "CodegenConfig" begin
