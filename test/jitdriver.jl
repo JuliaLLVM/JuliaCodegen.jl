@@ -9,7 +9,7 @@ jd_later(x) = x + 1
 jd_call_later(x) = jd_later(x) * 2
 @noinline jd_vararg(xs...) = sum(xs)
 jd_call_vararg(x) = jd_vararg(x, x)
-# (a calling convention JuliaCodegen doesn't support)
+# (a calling convention JuliaCodegen doesn't support; native code compiles it only for x86)
 @noinline jd_stdcall(s::String) = Int(ccall(:strlen, stdcall, Csize_t, (Cstring,), s))
 jd_call_stdcall(s) = jd_stdcall(s) + 1
 
@@ -46,10 +46,12 @@ end
 @testset "fallbacks" begin
     fallback = JuliaCodegen.JIT(; config=JuliaCodegen.CodegenConfig(; on_unsupported=:fallback,
                                                                     on_internal_error=:error))
-    @test JuliaCodegen.jit_call(fallback, jd_call_stdcall, "four") == 5
-    jf = JuliaCodegen.jit_compile(fallback, Tuple{typeof(jd_call_stdcall), String})
-    @test any(((mi, why),) -> mi.def.name === :jd_stdcall, jf.fallbacks)
-    @test_throws JuliaCodegen.Unsupported jd_run(jd_call_stdcall, "four")
+    if Sys.ARCH in (:x86_64, :i686)
+        @test JuliaCodegen.jit_call(fallback, jd_call_stdcall, "four") == 5
+        jf = JuliaCodegen.jit_compile(fallback, Tuple{typeof(jd_call_stdcall), String})
+        @test any(((mi, why),) -> mi.def.name === :jd_stdcall, jf.fallbacks)
+        @test_throws JuliaCodegen.Unsupported jd_run(jd_call_stdcall, "four")
+    end
     # varargs callees are called through the runtime
     @test jd_run(jd_call_vararg, 3) == 6
 end
