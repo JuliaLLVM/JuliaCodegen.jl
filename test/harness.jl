@@ -25,6 +25,12 @@
     @test o == Outcome(:arguments, ([1], 2), ([0], 2))
 
     @test differential(native, +, 1, 2; gc=true) == OK
+
+    # mutable objects without `==` compare by their fields
+    @test results_equal(Ref(1), Ref(1))
+    @test !results_equal(Ref(1), Ref(2))
+    @test results_equal((Ref(1), 2), (Ref(1), 2))
+    @test !results_equal(Ref{Any}(1), Ref{Int}(1))
     @test sprint(show, OK) == "Outcome(:ok)"
     @test sprint(show, Outcome(:value, 3, 4)) == "Outcome(:value, expected = 3::Int64, got = 4::Int64)"
 end
@@ -33,7 +39,6 @@ end
     native(f, args...) = f(args...)
     @cgtest run=native +(1, 2)
     @cgtest run=native sum([1.0, 2.0])
-    @test_throws "cannot run code yet" cgrun(+, 1, 2)
     @test_throws LoadError @eval @cgtest 1
     @test_throws LoadError @eval @cgtest foo=1 f(1)
     @test_throws LoadError @eval @cgtest f(args...)

@@ -11,6 +11,8 @@ using LLVM
 import JuliaIR
 import Libdl
 
+const CC = Base.Compiler
+
 include("errors.jl")
 include("target.jl")
 include("facts.jl")
@@ -21,5 +23,11 @@ include("prologue.jl")
 include("repr.jl")
 include("layout.jl")
 include("values.jl")
+include("walk.jl")
+include("context.jl")
+include("constants.jl")
+include("boxing.jl")
+include("function.jl")
+include("ir.jl")
 
 end

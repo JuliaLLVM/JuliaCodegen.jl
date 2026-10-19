@@ -15,3 +15,6 @@
 - The representation of values (`repr_kind`: ghost, inline, unboxed union or boxed),
   the LLVM layouts of inline types (`Layouts`), the LLVM type of unboxed unions, and
   `CGVal`.
+- Functions from `IRCode`: the IR walker, function bodies with control flow and phis,
+  boxing and unboxing, constants (objects through globals the linker binds), and jlcall
+  entry wrappers (`emit_entry!`).
