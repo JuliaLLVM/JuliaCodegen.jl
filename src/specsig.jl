@@ -3,6 +3,7 @@
 #
 #   swiftcc <ret> f([ptr sret(T) %sret,] ptr swiftself %pgcstack, args...)
 #
+# (or, without the pgcstack argument, `gcstack_arg=false`, in the C calling convention).
 # Ghost arguments are not passed; boxed values (and unboxed unions) are passed as tracked
 # pointers, primitive and vector values by value (small integers `signext` or `zeroext`),
 # and other inline values by a `ptr addrspace(11)` reference. Inline results larger than
@@ -20,7 +21,8 @@
 
 A function signature in Julia's native specialized calling convention: how each argument
 is passed (`nothing` for ghosts, which aren't), how the result is returned (`:void`,
-`:value`, `:boxed` or `:sret`), the LLVM function type and the return and parameter
+`:value`, `:boxed` or `:sret`), whether the pgcstack is passed (`gcstack`, then in the
+Swift calling convention), the LLVM function type and the return and parameter
 attributes.
 """
 struct SpecSig
@@ -28,6 +30,7 @@ struct SpecSig
     rettype::Any
     args::Vector{Union{Nothing,SpecArg}}
     ret::Symbol
+    gcstack::Bool
     ft::LLVM.FunctionType
     retattrs::Vector{LLVM.Attribute}
     paramattrs::Vector{Vector{LLVM.Attribute}}
@@ -51,13 +54,16 @@ is_singleton_type(@nospecialize T) = T isa DataType && isdefined(T, :instance)
 is_aggregate(ty::LLVM.LLVMType) = ty isa LLVM.StructType || ty isa LLVM.ArrayType
 
 """
-    JuliaCodegen.specsig_abi(cgm, argtypes, rettype) -> SpecSig
+    JuliaCodegen.specsig_abi(cgm, argtypes, rettype; gcstack_arg) -> SpecSig
 
 The signature of a function of the Julia argument types `argtypes` and return type
-`rettype` in the specsig convention, as native code declares it. Throws `Unsupported` for
-signatures it doesn't handle.
+`rettype` in the specsig convention, as native code declares it. With `gcstack_arg`
+(by default the configuration's), the pgcstack is passed as `swiftself`; without, the
+function has the C calling convention. Throws `Unsupported` for signatures it doesn't
+handle.
 """
-function specsig_abi(cgm::CGModule, argtypes::Vector{Any}, @nospecialize(rettype))
+function specsig_abi(cgm::CGModule, argtypes::Vector{Any}, @nospecialize(rettype);
+                     gcstack_arg::Bool=cgm.config.gcstack_arg)
     ls = cgm.layouts
     params = LLVM.LLVMType[]
     paramattrs = Vector{LLVM.Attribute}[]
@@ -85,9 +91,11 @@ function specsig_abi(cgm::CGModule, argtypes::Vector{Any}, @nospecialize(rettype
             ret, rty = :value, lt
         end
     end
-    push!(params, T_ptr())
-    push!(paramattrs, LLVM.Attribute[attr("nonnull"), attr("swiftself")])
-    cgm.config.dialect.gc_stack_argument && push!(paramattrs[end], LLVM.StringAttribute("gcstack"))
+    if gcstack_arg
+        push!(params, T_ptr())
+        push!(paramattrs, LLVM.Attribute[attr("nonnull"), attr("swiftself")])
+        cgm.config.dialect.gc_stack_argument && push!(paramattrs[end], LLVM.StringAttribute("gcstack"))
+    end
     args = Union{Nothing,SpecArg}[]
     for T in argtypes
         k = repr_kind(T)
@@ -115,7 +123,8 @@ function specsig_abi(cgm::CGModule, argtypes::Vector{Any}, @nospecialize(rettype
             push!(paramattrs, ext === nothing ? LLVM.Attribute[] : LLVM.Attribute[attr(ext)])
         end
     end
-    return SpecSig(argtypes, rettype, args, ret, LLVM.FunctionType(rty, params), retattrs, paramattrs)
+    return SpecSig(argtypes, rettype, args, ret, gcstack_arg, LLVM.FunctionType(rty, params),
+                   retattrs, paramattrs)
 end
 
 function add_attributes!(f::Union{LLVM.Function,LLVM.CallBase}, sig::SpecSig)
@@ -139,7 +148,7 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
     m isa Method && m.isva && unsupported("the specsig convention for the varargs method ", m)
     sig = specsig_abi(cgm, info.argtypes, info.rettype)
     f = LLVM.Function(cgm.mod, String(name), sig.ft)
-    LLVM.callconv!(f, LLVM.API.LLVMSwiftCallConv)
+    sig.gcstack && LLVM.callconv!(f, LLVM.API.LLVMSwiftCallConv)
     init_function!(f, cgm.config.target)
     add_attributes!(f, sig)
     @dispose b=LLVM.IRBuilder() begin
@@ -148,8 +157,10 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
         fc = FnCtx(cgm, info, nothing, b, top)
         ps = LLVM.parameters(f)
         p = sig.ret === :sret ? 2 : 1
-        fc.pgcstack = ps[p]
-        p += 1
+        if sig.gcstack
+            fc.pgcstack = ps[p]
+            p += 1
+        end
         ops = LLVM.Value[]
         for (T, k) in zip(info.argtypes, sig.args)
             k === nothing && continue
@@ -197,7 +208,7 @@ function emit_specsig_call!(fc::FnCtx, sig::SpecSig, callee::LLVM.Value, args::V
         slot = entry_alloca!(fc, layout(fc, rt).llvm; align=Base.datatype_alignment(rt))
         push!(ops, slot)
     end
-    push!(ops, fc.pgcstack)
+    sig.gcstack && push!(ops, fc.pgcstack)
     for (a, T, k) in zip(args, sig.argtypes, sig.args)
         k === nothing && continue
         if k === SpecBoxed
@@ -211,7 +222,7 @@ function emit_specsig_call!(fc::FnCtx, sig::SpecSig, callee::LLVM.Value, args::V
         end
     end
     r = LLVM.call!(b, sig.ft, callee, ops)
-    LLVM.callconv!(r, LLVM.API.LLVMSwiftCallConv)
+    sig.gcstack && LLVM.callconv!(r, LLVM.API.LLVMSwiftCallConv)
     add_attributes!(r, sig)
     k = repr_kind(rt)
     k === Bottom && return emit_unreachable!(fc)

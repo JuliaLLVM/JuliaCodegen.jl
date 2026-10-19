@@ -42,5 +42,6 @@ include("specsig.jl")
 include("cfunction.jl")
 include("ir.jl")
 include("output.jl")
+include("emit_into.jl")
 
 end

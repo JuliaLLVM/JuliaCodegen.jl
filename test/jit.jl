@@ -41,7 +41,7 @@ emits the function `name` in the jlcall convention that calls it. Every module p
 """
 function test_compile(@nospecialize(tt); optimize::Bool=true, config=test_config(),
                       emit=emit_jlcall_entry!, relocatable::Bool=true)
-    @lock TEST_LOCK get!(TEST_CACHE, (tt, optimize, config.on_unsupported, emit)) do
+    @lock TEST_LOCK get!(TEST_CACHE, (tt, optimize, config, emit)) do
         jit = test_jit()
         fallbacks = Pair{Core.MethodInstance,Any}[]
         roots = Any[]
