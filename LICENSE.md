@@ -1,4 +1,4 @@
-The JuliaIR.jl package is licensed under the MIT "Expat" License:
+The JuliaCodegen.jl package is licensed under the MIT "Expat" License:
 
 > Copyright (c) 2026: Valentin Churavy and other contributors.
 >
