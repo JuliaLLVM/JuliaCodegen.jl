@@ -3,6 +3,13 @@
 `Pkg.test()` runs the package's tests, and [Aqua.jl](https://github.com/JuliaTesting/Aqua.jl)'s
 checks of the package. The helpers the tests share are in `test/testhelpers.jl`.
 
+CI runs them on Julia 1.12, 1.13, the latest prerelease and nightly. Locally, give each
+Julia version its own manifest, since `test/` and `docs/` share the package's manifest as
+workspace projects: create an empty `Manifest-v1.<minor>.toml` (e.g. with
+`touch Manifest-v1.14.toml`), then `julia +1.14-nightly --project -e 'using Pkg;
+Pkg.resolve(); Pkg.test()'`. A manifest resolved by one version can make another fail to
+precompile its standard libraries.
+
 ## Differential execution
 
 The main oracle is Julia's native code generator: `@cgtest f(args...)` runs `f(args...)`

@@ -22,13 +22,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ['1.12', '1.13', 'nightly']
+        version: ['1.12', '1.13', 'pre', 'nightly']
         os: ['ubuntu-latest', 'macOS-latest', 'windows-latest']
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
+          include-all-prereleases: true
       - uses: julia-actions/cache@v3
       # until the LLVM.jl changes JuliaIR.jl uses are released
       - uses: ./.github/actions/llvm-dev
