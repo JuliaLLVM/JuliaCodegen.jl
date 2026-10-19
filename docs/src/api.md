@@ -109,6 +109,19 @@ JuliaCodegen.emit_unbox
 JuliaCodegen.convert_repr
 ```
 
+## Calls and intrinsics
+
+```@docs
+JuliaCodegen.emit_intrinsic
+JuliaCodegen.atomic_ordering
+JuliaCodegen.emit_dynamic_call
+JuliaCodegen.emit_unreachable!
+JuliaCodegen.emit_guard!
+JuliaCodegen.entry_alloca!
+JuliaCodegen.declare_runtime
+JuliaCodegen.runtime_function
+```
+
 ## Targets
 
 ```@docs

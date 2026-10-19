@@ -45,6 +45,10 @@ function op_spec(dialect::JuliaIR.Dialect, name::String)
                memory=() -> LLVM.MemoryEffects(; argmem=:read, inaccessiblemem=:readwrite))
     elseif name == "julia.call"
         OpSpec(() -> FT(T_tracked(), [T_ptr(), T_tracked()]; vararg=true); ret=[:nonnull])
+    elseif name == "julia.call2"
+        # like julia.call, with the second argument passed after the arguments array
+        OpSpec(() -> FT(T_tracked(), [T_ptr(), T_tracked(), T_tracked()]; vararg=true);
+               ret=[:nonnull])
     elseif name == "julia.typeof"
         OpSpec(() -> FT(T_tracked(), [T_tracked()]); fn=[:nounwind, :norecurse],
                ret=[:nonnull], memory=() -> LLVM.MemoryEffects(:none))

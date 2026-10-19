@@ -28,6 +28,9 @@ include("context.jl")
 include("constants.jl")
 include("boxing.jl")
 include("function.jl")
+include("runtime.jl")
+include("calls.jl")
+include("intrinsics.jl")
 include("ir.jl")
 
 end
