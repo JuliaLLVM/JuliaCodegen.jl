@@ -454,6 +454,7 @@ function emit_foreigncall(fc::FnCtx, ex::Expr, @nospecialize(typ))
         unsupported("a ccall with a cancellation handler")
     reset_safe = cc isa Tuple && length(cc) >= 5 && cc[5] === true
     cc = cc isa Tuple ? cc[1] : cc
+    cc === :llvmcall && return emit_llvmcall_cc(fc, ex, typ)
     cc in (:ccall, :cdecl, :c) || unsupported("the calling convention ", cc)
     argtypes = collect(Any, argtypes)
     target = static_ccall_target(fc, name)
@@ -558,6 +559,55 @@ function emit_foreigncall(fc::FnCtx, ex::Expr, @nospecialize(typ))
     end
     k === :boxed && return boxed(rt <: Ref && rt !== Any && rt !== Union{} ? rt.parameters[1] : rt, r)
     return ccall_result(fc, r, rt)
+end
+
+"""
+    JuliaCodegen.emit_llvmcall_cc(fc, ex, typ) -> CGVal
+
+`ccall("llvm.name", llvmcall, rt, argtypes, args...)`: a call of the LLVM function `name`
+(an intrinsic, also one that LLVM doesn't know, which back ends and validation report),
+declared with the LLVM types of `llvmcall` (tuples of `VecElement`s are vectors), as
+native code calls it.
+"""
+function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
+    b = fc.builder
+    name, rt, argtypes, nreq = ex.args[1:4]
+    target = static_ccall_target(fc, name)
+    target isa Tuple && length(target) == 1 && (target = target[1])
+    target isa Union{Symbol,String} || unsupported("an llvmcall of a name not known at compile time")
+    fname = String(target)
+    # (native code compiles anything but an intrinsic to an error: "llvmcall only supports
+    # intrinsic calls")
+    startswith(fname, "llvm.") || unsupported("an llvmcall of the non-intrinsic ", fname)
+    nargs = length(argtypes)
+    (nreq == 0 || nreq == nargs) || unsupported("a variadic llvmcall")
+    # (native code mangles the base name of an overloaded intrinsic, e.g. `llvm.powi`, from
+    # the signature)
+    intr = tryparse(LLVM.Intrinsic, fname)
+    intr !== nothing && LLVM.isoverloaded(intr) && LLVM.name(intr) == fname &&
+        unsupported("an llvmcall of the unmangled overloaded intrinsic ", fname)
+    mod = fc.cgm.mod
+    lrt = llvmcall_type(fc, rt)
+    lats = LLVM.LLVMType[llvmcall_type(fc, T) for T in argtypes]
+    ft = LLVM.FunctionType(lrt, lats)
+    f = if haskey(LLVM.functions(mod), fname)
+        g = LLVM.functions(mod)[fname]
+        LLVM.function_type(g) == ft || unsupported("an llvmcall of ", fname, " with another signature")
+        g
+    else
+        LLVM.Function(mod, fname, ft)
+    end
+    ops = LLVM.Value[]
+    for (i, T) in enumerate(argtypes)
+        v = convert_repr(fc, operand(fc, ex.args[5+i]), T)
+        v.kind === Bottom && return v
+        v.kind === Inline || unsupported("an llvmcall argument of type ", T)
+        push!(ops, LLVM.value_type(v.V) == lats[i] ? v.V : reinterpret_value(fc, v.V, lats[i]))
+    end
+    r = LLVM.call!(b, ft, f, ops)
+    lrt isa LLVM.VoidType && return ghost(Nothing, nothing)
+    rty = value_type(fc, rt)
+    return inline(rt, LLVM.value_type(r) == rty ? r : reinterpret_value(fc, r, rty))
 end
 
 # Runtime functions that native code emits inline (`emit_ccall`'s special functions):

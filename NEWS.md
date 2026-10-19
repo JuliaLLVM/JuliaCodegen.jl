@@ -78,3 +78,5 @@
   does: an unordered load of the binding's value (with `UndefVarError` from the runtime)
   and, for globals of type `Any`, a release store and the binding's write barrier; also
   for `getglobal` and `setglobal!` with constant arguments.
+- `ccall` in the `llvmcall` convention: calls of LLVM intrinsics (also ones LLVM doesn't
+  know, left to back ends and validation), as GPU code uses them.

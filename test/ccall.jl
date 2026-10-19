@@ -52,6 +52,14 @@ if LIBCABI !== nothing
     end
 end
 
+const CC_V4 = NTuple{4,VecElement{Float32}}
+cc_sqrt(x) = ccall("llvm.sqrt.f64", llvmcall, Float64, (Float64,), x)
+cc_ctpop(x) = ccall("llvm.ctpop.i64", llvmcall, Int64, (Int64,), x)
+cc_fma(a, b, c) = ccall("llvm.fma.v4f32", llvmcall, CC_V4, (CC_V4, CC_V4, CC_V4), a, b, c)
+cc_donothing(x) = (ccall("llvm.donothing", llvmcall, Cvoid, ()); x)
+cc_unknown() = (ccall("llvm.jctest.nonexistent", llvmcall, Cvoid, ()); nothing)
+cc_not_intrinsic(x) = ccall("jctest_function", llvmcall, Int, (Int,), x)
+
 @testset "ccall" begin
 
 @testset "calls" begin
@@ -107,6 +115,24 @@ end
         @check "call ptr @ijl_load_and_lookup("
         print(test_ir(cc_libm, (Float64,)))
     end
+end
+
+@testset "llvmcall convention" begin
+    @cgtest cc_sqrt(2.25)
+    @cgtest cc_ctpop(0b101101)
+    v(x...) = map(VecElement, Float32.(x))
+    @cgtest cc_fma(v(1, 2, 3, 4), v(2, 2, 2, 2), v(1, 1, 1, 1))
+    @cgtest cc_donothing(3)
+    @test @filecheck begin
+        @check "call double @llvm.sqrt.f64(double"
+        test_ir(cc_sqrt, (Float64,))
+    end
+    # an intrinsic LLVM doesn't know is declared, and left to back ends and validation
+    @test @filecheck begin
+        @check "declare void @llvm.jctest.nonexistent()"
+        test_module_ir(cc_unknown, (); triple=JuliaCodegen.host_target().triple)
+    end
+    @test_throws JuliaCodegen.Unsupported test_ir(cc_not_intrinsic, (Int,))
 end
 
 end
