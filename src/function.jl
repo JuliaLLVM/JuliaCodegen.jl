@@ -328,13 +328,16 @@ end
 ## the jlcall entry
 
 """
-    JuliaCodegen.emit_jlcall_wrapper!(cgm, info, name) -> LLVM.Function
+    JuliaCodegen.emit_jlcall_wrapper!(cgm, info, name; specfunc=nothing) -> LLVM.Function
 
 The entry of the function `info` in the jlcall convention, `jl_value_t *name(jl_value_t
 *F, jl_value_t **args, uint32_t nargs)`: it unboxes the arguments, calls the function,
-and boxes the result.
+and boxes the result. With `specfunc`, the function's entry in the specsig convention
+(see [`emit_specsig_wrapper!`](@ref JuliaCodegen.emit_specsig_wrapper!)), it calls that,
+as native code's jlcall entries call their specsig functions.
 """
-function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractString)
+function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractString;
+                              specfunc::Union{Nothing,LLVM.Function}=nothing)
     ft = LLVM.FunctionType(T_tracked(), [T_tracked(), T_ptr(), LLVM.Int32Type()])
     f = LLVM.Function(cgm.mod, String(name), ft)
     init_function!(f, cgm.config.target)
@@ -370,6 +373,14 @@ function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStrin
                 tbaa!(fc, LLVM.load!(b, T_tracked(), slot; align=config(fc).target.pointer_size), :const)
             end
             push!(args, convert_repr(fc, boxed(Any, p), T))
+        end
+        if specfunc !== nothing
+            # (which takes the arguments of a varargs method one by one)
+            sig = specsig_abi(cgm, sig, info.rettype)
+            r = emit_specsig_call!(fc, sig, specfunc, args)
+            # (after a call that doesn't return, in a block that is never reached)
+            repr_kind(info.rettype) === Bottom ? LLVM.unreachable!(b) : LLVM.ret!(b, emit_box(fc, r))
+            return f
         end
         if packed !== nothing
             push!(args, packed)

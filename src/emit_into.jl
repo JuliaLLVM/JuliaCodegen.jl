@@ -90,15 +90,16 @@ function emit_sources!(cgm::CGModule, codeinfos, sources)
         # call), its entries `j_f_N` in the specsig convention (the prefix of native code's
         # specsig wrappers) and `jfptr_f_N` in the jlcall one
         base = chopprefix(LLVM.name(info.llvmf), "julia_")
-        func = emit_jlcall_wrapper!(cgm, info, "jfptr_" * base)
-        push!(cgm.entries, Entry(info.mi, LLVM.name(func), :jlcall))
         specfunc = try
-            LLVM.name(emit_specsig_wrapper!(cgm, info, "j_" * base))
+            emit_specsig_wrapper!(cgm, info, "j_" * base)
         catch err
             err isa Unsupported || rethrow()
             nothing
         end
-        compiled[ci] = CompiledFunctions(LLVM.name(func), specfunc)
+        # (which calls the specsig entry, as native code's)
+        func = emit_jlcall_wrapper!(cgm, info, "jfptr_" * base; specfunc)
+        push!(cgm.entries, Entry(info.mi, LLVM.name(func), :jlcall))
+        compiled[ci] = CompiledFunctions(LLVM.name(func), specfunc === nothing ? nothing : LLVM.name(specfunc))
     end
     return compiled, codegen_output(cgm)
 end
