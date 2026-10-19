@@ -307,6 +307,10 @@ function emit_symbol_address(fc::FnCtx, sym::Symbol, @nospecialize(lib); ft=noth
     if lib === nothing && libexpr === nothing
         rname = runtime_symbol_name(sym)
         rname === nothing || return declare_symbol(cgm, rname, ft)
+        # the library that defines it, as native code finds it (`jl_dlfind`): on Windows,
+        # which has no global symbol namespace, the C runtime, kernel32, ...
+        found = ccall(:jl_dlfind, Cstring, (Cstring,), String(sym))
+        found == C_NULL || (lib = unsafe_string(found))
     end
     b = fc.builder
     P = T_ptr()

@@ -6,8 +6,8 @@ const CABI_CFUNCTION = false   # whether `@cfunction` wrappers are checked too
 # (byval, sret, signext, zeroext, align, noalias) — checked against
 #  * a table of the expected declarations per target (test/cabi_targets.txt),
 #    which is what Julia's native abi_*.cpp produce for these types, and
-#  * clang's declaration of the equivalent C function for the same triple, when clang is
-#    installed, up to the coercion-type differences listed in `CLANG_EQUIV` and
+#  * clang's declaration of the equivalent C function for the same triple, with
+#    JULIACODEGEN_CLANG=1 and clang installed, up to the coercion-type differences listed in `CLANG_EQUIV` and
 #    `CLANG_KNOWN` (native Julia's own deviations, ported as they are).
 # Native Julia selects its ABI when it is built (`DefaultAbiState` in ccall.cpp), so it
 # cannot emit for another target; clang is the reference native's ABI files follow.
@@ -279,7 +279,8 @@ end
 
 # --- clang's -------------------------------------------------------------------------------
 
-const CLANG = Sys.which("clang")
+# (opt-in, `JULIACODEGEN_CLANG=1`: clang versions differ in the IR they emit)
+const CLANG = get(ENV, "JULIACODEGEN_CLANG", "") == "1" ? Sys.which("clang") : nothing
 
 # clang's declarations of the cases for `triple` (named struct types replaced by their
 # bodies), and for variadic ones its call with arguments of the case's types
