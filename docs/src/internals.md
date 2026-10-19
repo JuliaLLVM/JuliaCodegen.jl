@@ -153,3 +153,9 @@ JuliaCodegen.gc_roots
 JuliaCodegen.emit_foreigncall
 JuliaCodegen.emit_cglobal
 ```
+
+## Exceptions
+
+```@docs
+JuliaCodegen.emit_enter!
+```

@@ -42,3 +42,7 @@
   calls, `gc_safe` calls, runtime function pointers; relocatable symbol references (by
   name, or looked up on first use); `cglobal`; `GC.@preserve`; and the runtime functions
   native code emits inline.
+- Exceptions: `try`/`catch`/`finally` with the dialect's handlers (`julia.except_enter` on
+  1.12, `jl_handler_t`, `jl_enter_handler` and setjmp from 1.13 on), values flowing into
+  catch blocks (PhiC/Upsilon), scopes (`@with`), `:throw_undef_if_not`, assignments and
+  reads of non-constant globals, and `new` of types known only at run time.

@@ -645,5 +645,7 @@ function emit_expr_head!(fc::FnCtx, idx::Int, ex::Expr, @nospecialize(typ))
         tok === nothing || call_op!(fc, "llvm.julia.gc_preserve_end", tok)
         return nothing
     end
+    r = emit_exception_head!(fc, idx, ex, typ)
+    r === missing || return r
     unsupported("the expression head ", head)
 end

@@ -82,6 +82,13 @@ mutable struct FnCtx <: AbstractFnCtx
     loaded::IdDict{Any,LLVM.Value}
     "The tokens of the `gc_preserve_begin` statements."
     preserve_tokens::Dict{Int,LLVM.Value}
+    "The exception stack depth saved by each `enter` with a handler."
+    excstack::Dict{Int,LLVM.Value}
+    "The preserve token and the old scope of each `enter` with a scope."
+    scope_restore::Dict{Int,Tuple{LLVM.Value,LLVM.Value}}
+    "The stack slot of each PhiC, and the PhiC each Upsilon feeds."
+    phic_slots::Dict{Int,LLVM.Value}
+    upsilon_to_phic::Dict{Int,Int}
 end
 
 function FnCtx(cgm::CGModule, info::FuncInfo, ir, builder::LLVM.IRBuilder, top::LLVM.BasicBlock)
@@ -90,7 +97,8 @@ function FnCtx(cgm::CGModule, info::FuncInfo, ir, builder::LLVM.IRBuilder, top::
     return FnCtx(cgm, info, ir, builder, CGVal[], Vector{Union{Nothing,CGVal}}(nothing, n),
                  LLVM.BasicBlock[], [Tuple{Int,LLVM.BasicBlock}[] for _ in 1:nb],
                  Tuple{Int,Int,LLVM.Instruction}[], 0, top, nothing, IdDict{Any,LLVM.Value}(),
-                 Dict{Int,LLVM.Value}())
+                 Dict{Int,LLVM.Value}(), Dict{Int,LLVM.Value}(),
+                 Dict{Int,Tuple{LLVM.Value,LLVM.Value}}(), Dict{Int,LLVM.Value}(), Dict{Int,Int}())
 end
 
 config(fc::FnCtx) = fc.cgm.config

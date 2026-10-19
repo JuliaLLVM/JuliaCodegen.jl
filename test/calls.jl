@@ -16,8 +16,8 @@ c_call_throws(x) = x > 0 ? x : c_throws(x)
 @noinline c_vararg(xs...) = length(xs)
 c_call_vararg(x) = c_vararg(x, x, x)
 c_closure(x) = (y -> x + y)(3)
-# (`try` is not supported yet)
-@noinline c_strlen(s::String) = try parse(Int, s) catch; length(s) end
+# (a calling convention JuliaCodegen doesn't support)
+@noinline c_strlen(s::String) = Int(ccall(:strlen, stdcall, Csize_t, (Cstring,), s))
 c_call_ccall(s) = c_strlen(s) + 1
 function c_find(v::Vector{Int}, x::Int)
     for (i, y) in enumerate(v)

@@ -24,9 +24,11 @@ The tag of objects of type `T`, as an integer to compare with `emit_tag`'s.
 function tag_constant(fc::FnCtx, @nospecialize T)
     st = smalltag(config(fc), T)
     st == 0 || return iptr(fc, st << 4)
-    p = literal_pointer(fc, T)
-    return LLVM.position!(fc.builder, LLVM.after(p)) do
-        LLVM.ptrtoint!(fc.builder, LLVM.addrspacecast!(fc.builder, p, T_ptr()), iptr_type(fc))
+    # the untracked pointer loaded from the type's global (a tracked pointer may not be
+    # cast to an integer)
+    raw = LLVM.operands(literal_pointer(fc, T))[1]
+    return LLVM.position!(fc.builder, LLVM.after(raw)) do
+        LLVM.ptrtoint!(fc.builder, raw, iptr_type(fc))
     end
 end
 
@@ -279,8 +281,23 @@ function emit_new!(fc::FnCtx, @nospecialize(T), args, @nospecialize(typ))
     return emit_new_runtime(fc, T, args, typ)
 end
 
-emit_new_runtime(fc::FnCtx, @nospecialize(T), args, @nospecialize(typ)) =
-    unsupported("`new` of ", T, " with fields of types ", Any[a.typ for a in args])
+# `new` by the runtime (`jl_new_structv`, which has the signature of a jlcall with the type
+# as its function), which also throws the errors of invalid field values
+function emit_new_runtime(fc::FnCtx, T, args, @nospecialize(typ))
+    Tv = T isa CGVal ? T : const_value(fc, T)
+    r = call_op!(fc, "julia.call", runtime_function(fc, :jl_new_structv), emit_box(fc, Tv),
+                 LLVM.Value[emit_box(fc, a) for a in args]...)
+    typ === Union{} && return emit_unreachable!(fc)
+    return convert_repr(fc, boxed(Any, r), typ)
+end
+
+emit_new_dynamic!(fc::FnCtx, T::CGVal, args, @nospecialize(typ)) =
+    emit_new_runtime(fc, T, CGVal[args...], typ)
+
+# a read of a global that is not constant, by the runtime
+nonconst_global(fc::FnCtx, ref::GlobalRef) =
+    emit_dynamic_call(fc, const_value(fc, Core.getglobal),
+                      CGVal[const_value(fc, ref.mod), const_value(fc, ref.name)], Any)
 
 # the field index of the constant field `f` of `T`
 function field_index(@nospecialize(T), f::CGVal)
