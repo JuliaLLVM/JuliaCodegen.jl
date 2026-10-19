@@ -1,6 +1,25 @@
 # Functions: declarations, bodies (IRCode to LLVM IR) and jlcall entry wrappers.
 
 """
+    JuliaCodegen.init_function!(f, target)
+
+The attributes every function defined by the code generator has, as native code gives
+them (`jl_init_function`): unwind tables on 64-bit Windows (for its exception handling,
+which unwinds through every frame), a 16-byte aligned stack on 32-bit Windows, frame
+pointers where native code keeps them, and inline stack probes but on Windows.
+"""
+function init_function!(f::LLVM.Function, target::Target)
+    (; arch, os) = platform(target.triple)
+    attrs = f.function_attributes
+    os === :windows && arch === :i686 && push!(attrs, LLVM.EnumAttribute("alignstack", 16))
+    # (`uwtable` with `UWTableKind::Default`, which LLVM encodes as 2)
+    os === :windows && arch === :x86_64 && push!(attrs, LLVM.EnumAttribute("uwtable", 2))
+    os in (:linux, :windows, :freebsd, :openbsd) && push!(attrs, LLVM.StringAttribute("frame-pointer", "all"))
+    os === :windows || push!(attrs, LLVM.StringAttribute("probe-stack", "inline-asm"))
+    return f
+end
+
+"""
     JuliaCodegen.declare_function!(cgm, mi, argtypes, rettype) -> FuncInfo
 
 Declare the function of `mi` in JuliaCodegen's internal convention (see
@@ -18,6 +37,7 @@ function declare_function!(cgm::CGModule, mi::Core.MethodInstance, argtypes::Vec
     fobj = f isa DataType && isdefined(f, :instance) ? f.instance : nothing
     llvmf = LLVM.Function(cgm.mod, unique_name(cgm, "julia", fobj), LLVM.FunctionType(ret, params))
     LLVM.linkage!(llvmf, LLVM.API.LLVMInternalLinkage)
+    init_function!(llvmf, cgm.config.target)
     rettype === Union{} && push!(llvmf.function_attributes, LLVM.EnumAttribute("noreturn"))
     info = FuncInfo(mi, llvmf, argtypes, rettype)
     cgm.funcs[mi] = info
@@ -194,6 +214,7 @@ and boxes the result.
 function emit_jlcall_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractString)
     ft = LLVM.FunctionType(T_tracked(), [T_tracked(), T_ptr(), LLVM.Int32Type()])
     f = LLVM.Function(cgm.mod, String(name), ft)
+    init_function!(f, cgm.config.target)
     @dispose b=LLVM.IRBuilder() begin
         top = LLVM.BasicBlock(f, "top")
         LLVM.position!(b, LLVM.at_end(top))

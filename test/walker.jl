@@ -90,6 +90,23 @@ end
     end
 end
 
+@testset "function attributes" begin
+    # the attributes every native function has, but `julia.fsig` (and `optnone` of jlcall
+    # wrappers), on the functions JuliaCodegen defines
+    attrs(f) = Set(string(a) for a in collect(f.function_attributes)
+                   if !occursin(r"julia\.fsig|optnone|noinline", string(a)))
+    ir = native_module_ir(w_identity, Tuple{Int})
+    native = @dispose ctx=Context() mod=parse(LLVM.Module, ir) begin
+        attrs(only(f for f in mod.functions if startswith(f.name, "julia_")))
+    end
+    @dispose ctx=Context() mod=parse(LLVM.Module, (cgrun(w_identity, 1); test_ir(w_identity, (Int,)))) begin
+        for f in mod.functions
+            LLVM.isdeclaration(f) && continue
+            @test attrs(f) == native
+        end
+    end
+end
+
 @testset "GC" begin
     # boxes of results survive collections
     @cgtest gc=true w_identity(WRef(10, "ten"))
