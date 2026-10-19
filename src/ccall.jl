@@ -698,6 +698,8 @@ function emit_expr_head!(fc::FnCtx, idx::Int, ex::Expr, @nospecialize(typ))
         return emit_foreigncall(fc, ex, typ)
     elseif head === :cfunction
         return emit_cfunction(fc, ex, typ)
+    elseif head === :invoke_modify
+        return emit_invoke_modify(fc, ex, typ)
     elseif head === :foreignglobal        # (Julia 1.14 and later)
         return emit_cglobal(fc, ex.args[1], typ)
     elseif head === :gc_preserve_begin

@@ -83,9 +83,11 @@ end
 invoke_target(@nospecialize(x)) =
     x isa Core.CodeInstance ? CC.get_ci_mi(x) : x::Core.MethodInstance
 
-function emit_invoke!(fc::FnCtx, ex::Expr, @nospecialize(typ))
-    mi = invoke_target(ex.args[1])
-    args = CGVal[operand(fc, a) for a in ex.args[2:end]]
+emit_invoke!(fc::FnCtx, ex::Expr, @nospecialize(typ)) =
+    emit_invoke_call(fc, invoke_target(ex.args[1]), CGVal[operand(fc, a) for a in ex.args[2:end]], typ)
+
+# the call `args` (the function first) of the method instance `mi`, a value of type `typ`
+function emit_invoke_call(fc::FnCtx, mi::Core.MethodInstance, args::Vector{CGVal}, @nospecialize(typ))
     # a call whose arguments may not match the signature (an invoke of a less specific
     # method with more specific arguments is fine; others are left to the runtime)
     sig = signature_argtypes(mi)

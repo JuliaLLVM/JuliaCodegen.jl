@@ -50,6 +50,24 @@ const B_EGAL_PAIRS = Any[
     (missing, missing), (BNested(BPoint(0, 1), BRef(2, "x")), BNested(BPoint(0, 1), BRef(2, "x"))),
 ]
 
+mutable struct B_Atomic
+    @atomic n::Int
+    @atomic f::Float64
+    @atomic s::Int8
+    @atomic r::Any
+end
+b_new() = B_Atomic(1, 1.5, Int8(3), "x")
+b_inc(c) = ((@atomic c.n += 2), (@atomic c.n))
+b_max(c) = ((@atomic c.f max 4.0), (@atomic c.f))
+b_small(c) = ((@atomic c.s *= Int8(2)), (@atomic c.s))
+b_ref(c) = ((@atomic c.r = (@atomic c.r) * "y"), (@atomic c.r))
+b_refmod(c) = ((@atomic c.r *= "z"), (@atomic c.r))
+b_bad(c) = (@atomic c.n += 0.5)          # (the result isn't an Int: TypeError)
+mutable struct B_Plain; n::Int; end
+b_plain(c) = Core.modifyfield!(c, :n, +, 1)   # (not atomic: an error from the runtime)
+b_orders(c) = (getfield(c, :n, :monotonic), getfield(c, :f, :acquire), getfield(c, :r, :sequentially_consistent),
+               getfield(c, :s, :not_atomic))   # (the last: ConcurrencyViolationError)
+
 @testset "builtins" begin
 
 @testset "===" begin
@@ -143,6 +161,24 @@ end
         @check "icmp ne ptr addrspace(10)"
         @check "@jl_egal__unboxed("
         print(test_ir(b_egal, (String, String)))
+    end
+end
+
+@testset "atomic field modifications" begin
+    @cgtest b_inc(b_new())
+    @cgtest b_max(b_new())
+    @cgtest b_small(b_new())
+    @cgtest b_ref(b_new())
+    @cgtest b_refmod(b_new())
+    @cgtest b_bad(b_new())
+    @cgtest b_plain(B_Plain(1))
+    @cgtest b_orders(b_new())
+    # a loop of compare-and-exchange calling the operation, as native code
+    @test @filecheck begin
+        @check "load atomic i64"
+        @check "cmpxchg ptr addrspace(11) %{{[0-9]+}}, i64 %{{[0-9]+}}, i64 %{{[0-9]+}} seq_cst monotonic"
+        @check_not "@ijl_apply_generic"
+        test_ir(b_inc, (B_Atomic,))
     end
 end
 
