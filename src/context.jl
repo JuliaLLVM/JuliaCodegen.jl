@@ -80,6 +80,8 @@ mutable struct FnCtx <: AbstractFnCtx
     current_task::Union{Nothing,LLVM.Value}
     "The objects loaded at the top of the function, by object."
     loaded::IdDict{Any,LLVM.Value}
+    "The tokens of the `gc_preserve_begin` statements."
+    preserve_tokens::Dict{Int,LLVM.Value}
 end
 
 function FnCtx(cgm::CGModule, info::FuncInfo, ir, builder::LLVM.IRBuilder, top::LLVM.BasicBlock)
@@ -87,7 +89,8 @@ function FnCtx(cgm::CGModule, info::FuncInfo, ir, builder::LLVM.IRBuilder, top::
     nb = ir === nothing ? 0 : length(ir.cfg.blocks)
     return FnCtx(cgm, info, ir, builder, CGVal[], Vector{Union{Nothing,CGVal}}(nothing, n),
                  LLVM.BasicBlock[], [Tuple{Int,LLVM.BasicBlock}[] for _ in 1:nb],
-                 Tuple{Int,Int,LLVM.Instruction}[], 0, top, nothing, IdDict{Any,LLVM.Value}())
+                 Tuple{Int,Int,LLVM.Instruction}[], 0, top, nothing, IdDict{Any,LLVM.Value}(),
+                 Dict{Int,LLVM.Value}())
 end
 
 config(fc::FnCtx) = fc.cgm.config

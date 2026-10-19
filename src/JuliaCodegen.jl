@@ -35,6 +35,8 @@ include("egal.jl")
 include("builtins.jl")
 include("unions.jl")
 include("memory.jl")
+include("cabi.jl")
+include("ccall.jl")
 include("ir.jl")
 
 end

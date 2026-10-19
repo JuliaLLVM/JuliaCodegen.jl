@@ -127,6 +127,8 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
     (name === :atomic_pointerref || name === :atomic_pointerset) &&
         return emit_atomic_pointer(fc, name, args)
     name === :have_fma && return emit_have_fma(fc, args)
+    # `cglobal(target, T)` up to Julia 1.13 (a `:foreignglobal` expression later)
+    name === :cglobal && return nothing
     (haskey(CASTS, name) || name === :bitcast) && return emit_cast(fc, name, args)
     any(a -> a.kind !== Inline, args) && return nothing
     # arithmetic and comparisons of operands of different types are a run-time error

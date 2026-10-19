@@ -14,6 +14,7 @@ function main()
             "Home" => "index.md",
             "Testing" => "testing.md",
             "API reference" => "api.md",
+            "Internals" => "internals.md",
         ],
         doctest = true,
     )
