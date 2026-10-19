@@ -1,4 +1,3 @@
-const CABI_CFUNCTION = false   # whether `@cfunction` wrappers are checked too
 
 # The C ABI on every target (src/cabi.jl): for a table of `ccall`/`cfunction` signatures,
 # the C function signature JuliaCodegen emits for each target triple (on this host, with
@@ -242,8 +241,7 @@ function codegen_sigs(case, triple)
         "unsupported: " * sprint(showerror, e)
     end
     cf = Symbol(:cabi_, name, :_cf)
-    # (`@cfunction` is not ported yet)
-    cfunction_sig = if CABI_CFUNCTION && isdefined(@__MODULE__, cf)
+    cfunction_sig = if isdefined(@__MODULE__, cf)
         try
             ir = test_module_ir(getfield(@__MODULE__, cf), (); triple)
             l = first(filter(l -> startswith(l, "define internal") && occursin("@jlcapi", l),
@@ -616,7 +614,7 @@ strip_retext(s) = replace(s, r"^(signext|zeroext) " => "")
                 if !regen
                     exp = get(expected, (tname, c[1]), nothing)
                     @test exp !== nothing && exp[1] == cs
-                    CABI_CFUNCTION && @test exp[2] == cfs
+                    @test exp[2] == cfs
                 end
                 cl === nothing && continue
                 m = clang_match(cs, cl[c[1]], tname)

@@ -39,6 +39,7 @@ include("cabi.jl")
 include("ccall.jl")
 include("exceptions.jl")
 include("specsig.jl")
+include("cfunction.jl")
 include("ir.jl")
 
 end

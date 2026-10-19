@@ -82,6 +82,7 @@ JuliaCodegen.SpecSig
 JuliaCodegen.specsig_abi
 JuliaCodegen.emit_specsig_wrapper!
 JuliaCodegen.emit_specsig_call!
+JuliaCodegen.emit_cfunction
 JuliaCodegen.literal_global
 JuliaCodegen.literal_objects
 JuliaCodegen.literal_pointer

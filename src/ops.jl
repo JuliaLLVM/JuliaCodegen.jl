@@ -36,7 +36,7 @@ const FT = LLVM.FunctionType
 
 # the intrinsics, by name; `dialect` selects the ones that differ between versions
 function op_spec(dialect::JuliaIR.Dialect, name::String)
-    if name == "julia.get_pgcstack"
+    if name == "julia.get_pgcstack" || name == "julia.get_pgcstack_or_new"
         OpSpec(() -> FT(T_ptr(), LLVM.LLVMType[]))
     elseif name == "julia.gc_alloc_obj"
         OpSpec(() -> FT(T_tracked(), [T_ptr(), LLVM.Int64Type(), T_tracked()]);

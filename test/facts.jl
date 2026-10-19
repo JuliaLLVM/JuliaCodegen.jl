@@ -51,6 +51,9 @@ end
     end
     @test rt.smalltag_shift == probed.smalltag_shift
     @test probed.int64_tag < rt.max_small_tag
+    @test rt.task_world_age == probed.world_age
+    @test rt.cfunction_cache === probed.cfunction_cache
+    @test rt.cfuncdata_size == probed.cfuncdata_size
 end
 
 end

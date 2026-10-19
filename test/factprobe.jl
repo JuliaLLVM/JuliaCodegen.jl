@@ -8,6 +8,8 @@ using InteractiveUtils
 _probe_try(x) = try _probe_mayfail(x) catch; -1 end
 _probe_alloc(x::Int) = Ref(x)
 _probe_store(r::Base.RefValue{Any}, x) = (r[] = x; nothing)
+_probe_cfunction_target(x::Cint) = x + 1
+_probe_cfunction() = @cfunction(_probe_cfunction_target, Cint, (Cint,))
 
 native_ir(f, tt) = sprint(io -> code_llvm(io, f, tt; raw=true, optimize=false,
                                           debuginfo=:none, dump_module=false))
@@ -66,10 +68,23 @@ function probe_facts()
     int64_tag = Int((header & ~UInt(15)) >> 4)
     smalltag_shift = something(findfirst(s -> Int(Int64.flags >> s) == int64_tag, 0:31)) - 1
 
+    # a `@cfunction`'s wrapper sets the world age, and resolves its entry point with
+    # `jl_get_abi_converter(ct, [fptr, last_world,] data)`
+    cir = sprint(io -> code_llvm(io, _probe_cfunction, Tuple{}; raw=true, optimize=false,
+                                 debuginfo=:none, dump_module=true))
+    world_age = parse(Int, capture(gep_regex("world_age", "current_task"), cir, "the world age")[1])
+    conv = capture(r"call ptr @jl_get_abi_converter\(([^)]*)\)", cir, "the ABI converter call")
+    convargs = split(conv[1], ", ")
+    data = capture(Regex("^\\Q$(split(convargs[end])[end])\\E = private global \\[(\\d+) x ptr\\]", "m"),
+                   cir, "the cfunction data")
+    cfunction_cache = length(convargs) == 4 ? :arguments : :cfuncdata
+    cfuncdata_size = parse(Int, data[1]) * sizeof(Ptr{Cvoid})
+
     return (; task_gcstack_offset=gcstack, task_ptls_offset=ptls,
             ptls_safepoint_offset=safepoint, task_eh_offset=eh, handler_size,
             handler_align, setjmp_name, setjmp_savemask, smalltag_shift, int64_tag,
-            exceptions, gcstack_argument, barrier_flavour)
+            exceptions, gcstack_argument, barrier_flavour, world_age, cfunction_cache,
+            cfuncdata_size)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

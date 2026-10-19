@@ -12,9 +12,9 @@ LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 
 # until JuliaIR.jl (and the LLVM.jl changes it needs) are released: JuliaIR.jl's open
-# stack, with the runtime facts JuliaCodegen needs (JuliaLLVM/JuliaIR.jl#21)
+# stack, with the runtime facts JuliaCodegen needs (JuliaLLVM/JuliaIR.jl#21, #36)
 [sources]
-JuliaIR = {url = "https://github.com/JuliaLLVM/JuliaIR.jl", rev = "vc/runtime-smalltags"}
+JuliaIR = {url = "https://github.com/JuliaLLVM/JuliaIR.jl", rev = "vc/runtime-cfunction"}
 LLVM = {url = "https://github.com/JuliaLLVM/LLVM.jl", rev = "tb/inline-api"}
 
 [compat]
