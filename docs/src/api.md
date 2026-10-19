@@ -10,7 +10,6 @@ JuliaCodegen
 
 ```@docs
 JuliaCodegen.CodegenConfig
-JuliaCodegen.OLDEST_JULIA
 ```
 
 ## Targets

@@ -61,12 +61,9 @@ end
 @testset "CodegenConfig" begin
     config = JC.CodegenConfig()
     @test config.target === JC.host_target()
-    @test config.julia == VERSION
     @test config.on_unsupported === :fallback
     @test config.on_internal_error === :fallback
 
-    @test JC.CodegenConfig(; julia=v"1.13.0-DEV.100").julia == v"1.13.0-DEV.100"
-    @test_throws "Julia 1.11.9 is not supported" JC.CodegenConfig(; julia=v"1.11.9")
     @test_throws "invalid on_unsupported policy :ignore" JC.CodegenConfig(; on_unsupported=:ignore)
     @test_throws "invalid on_internal_error policy" JC.CodegenConfig(; on_internal_error=:skip)
 end
