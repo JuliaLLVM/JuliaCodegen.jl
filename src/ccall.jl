@@ -564,11 +564,12 @@ end
 """
     JuliaCodegen.emit_llvmcall_cc(fc, ex, typ) -> CGVal
 
-`ccall("llvm.name", llvmcall, rt, argtypes, args...)`: a call of the LLVM function `name`
-(an intrinsic, also one that LLVM doesn't know, which back ends and validation report;
-the base name of an overloaded one is mangled from the call's signature), or with
+`ccall("llvm.name", llvmcall, rt, argtypes, args...)`: a call of the LLVM intrinsic `name`
+(the base name of an overloaded one is mangled from the call's signature), or with
 `"extern name"` of the external function `name`, declared with the LLVM types of
-`llvmcall` (tuples of `VecElement`s are vectors), as native code calls it.
+`llvmcall` (tuples of `VecElement`s are vectors), as native code calls it. Any other name
+(also of an intrinsic LLVM doesn't know) is an error at run time ("llvmcall only supports
+intrinsic calls"), as in native code.
 """
 function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     b = fc.builder
@@ -586,9 +587,9 @@ function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     f = if startswith(fname, "extern ")
         # `extern name`: an external function of that name, e.g. of a GPU runtime
         llvmcall_function(mod, chopprefix(fname, "extern "), ft)
-    elseif startswith(fname, "llvm.")
+    elseif startswith(fname, "llvm.") && tryparse(LLVM.Intrinsic, fname) !== nothing
         intr = tryparse(LLVM.Intrinsic, fname)
-        if intr !== nothing && LLVM.isoverloaded(intr) && LLVM.name(intr) == fname
+        if LLVM.isoverloaded(intr) && LLVM.name(intr) == fname
             # the base name of an overloaded intrinsic (`llvm.powi`): the overload of
             # the call's signature (`llvm.powi.f64.i32`), as native code mangles it
             try
@@ -601,9 +602,12 @@ function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
             llvmcall_function(mod, fname, ft)
         end
     else
-        # (native code compiles anything but an intrinsic or an `extern` function to an
-        # error: "llvmcall only supports intrinsic calls")
-        unsupported("an llvmcall of the non-intrinsic ", fname)
+        # anything but an intrinsic LLVM knows or an `extern` function is an error at run
+        # time, as native code compiles it (which GPU compilers report)
+        err = declare_runtime(mod, dialect(fc), :jl_error)
+        LLVM.call!(b, LLVM.function_type(err), err,
+                   LLVM.Value[cstring!(fc.cgm, "llvmcall only supports intrinsic calls")])
+        return emit_unreachable!(fc)
     end
     ops = LLVM.Value[]
     for (i, T) in enumerate(argtypes)

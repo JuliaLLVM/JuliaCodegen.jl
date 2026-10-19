@@ -21,6 +21,7 @@ i_fence() = (Core.Intrinsics.atomic_fence(:sequentially_consistent); nothing)
 i_fence2() = (Core.Intrinsics.atomic_fence(:sequentially_consistent, :system); nothing)
 # an intrinsic with the wrong number of arguments, which inference knows throws
 i_bad_intrinsic(x) = Core.Intrinsics.add_int(x)
+i_store_any(v::Vector{Int}, x) = GC.@preserve v (unsafe_store!(pointer(v), x); v[1])
 i_fast(x, y) = (Base.FastMath.mul_fast(x, y), Base.FastMath.div_fast(x, y),
                 Base.FastMath.min_fast(x, y), Base.FastMath.max_fast(x, y), Base.FastMath.sqrt_fast(x),
                 Base.FastMath.lt_fast(x, y), Base.FastMath.neg_fast(x))
@@ -106,6 +107,11 @@ end
     @cgtest i_bad_intrinsic(1)
     @cgtest i_llvmcall(Int32(41))
     @cgtest i_fast(2.0f0, 8.0f0)
+    # a value of another type than the element: checked (TypeError), as native code
+    @cgtest i_store_any([1], Any[5][1])
+    @cgtest i_store_any([1], Any[5.5][1])     # (InexactError, from `convert`)
+    @cgtest i_store_any([1], Any["x"][1])     # (MethodError, from `convert`)
+    @test occursin("@ijl_type_error(", test_ir(unsafe_store!, (Ptr{Int}, Any, Int)))
     # the fast-math flags of native code
     @test @filecheck begin
         @check "fmul fast float"

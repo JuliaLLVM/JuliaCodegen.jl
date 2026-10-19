@@ -129,12 +129,11 @@ end
         @check "call double @llvm.sqrt.f64(double"
         test_ir(cc_sqrt, (Float64,))
     end
-    # an intrinsic LLVM doesn't know is declared, and left to back ends and validation
-    @test @filecheck begin
-        @check "declare void @llvm.jctest.nonexistent()"
-        test_module_ir(cc_unknown, (); triple=JuliaCodegen.host_target().triple)
-    end
-    @test_throws JuliaCodegen.Unsupported test_ir(cc_not_intrinsic, (Int,))
+    # an intrinsic LLVM doesn't know, or not an intrinsic: an error at run time, as native
+    # code ("llvmcall only supports intrinsic calls")
+    @cgtest cc_unknown()
+    @cgtest cc_not_intrinsic(1)
+    @test occursin("call void @ijl_error(", test_ir(cc_unknown, ()))
     # an external function, by name
     @cgtest cc_extern("four")
     @test occursin("declare i64 @strlen(ptr)", test_ir(cc_extern, (String,)))

@@ -63,6 +63,40 @@ const CHECKED_ARITH = Dict{Symbol,String}(
 
 const CHECKED_DIVREM = (:checked_sdiv_int, :checked_udiv_int, :checked_srem_int, :checked_urem_int)
 
+"""
+    JuliaCodegen.emit_typecheck!(fc, x, T, context) -> Union{CGVal,Nothing}
+
+The value `x` as a value of type `T`, checked at run time as native code's
+`emit_typecheck`: a `TypeError` from the runtime (`jl_type_error(context, T, x)`) when it
+isn't one. `nothing` if the check needs a subtype test.
+"""
+function emit_typecheck!(fc::FnCtx, x::CGVal, @nospecialize(T), context::String)
+    x.typ <: T && return convert_repr(fc, x, T)
+    b = fc.builder
+    function type_error()
+        err = declare_runtime(fc.cgm.mod, dialect(fc), :jl_type_error)
+        rooted(v) = LLVM.addrspacecast!(b, v, LLVM.PointerType(AddrSpace.CalleeRooted))
+        LLVM.call!(b, LLVM.function_type(err), err,
+                   LLVM.Value[cstring!(fc.cgm, context), literal_pointer(fc, T), rooted(emit_box(fc, x))])
+        LLVM.unreachable!(b)
+    end
+    if typeintersect(x.typ, T) === Union{}
+        type_error()
+        LLVM.position!(b, LLVM.at_end(LLVM.BasicBlock(current_function(fc), "after_type_error")))
+        return bottom()
+    end
+    ok = emit_isa(fc, x, T)
+    ok === nothing && return nothing
+    f = current_function(fc)
+    fail = LLVM.BasicBlock(f, "type_error")
+    pass = LLVM.BasicBlock(f, "pass")
+    LLVM.br!(b, ok, pass, fail)
+    LLVM.position!(b, LLVM.at_end(fail))
+    type_error()
+    LLVM.position!(b, LLVM.at_end(pass))
+    return convert_repr(fc, x.kind === Boxed ? boxed(T, x.V) : x, T)
+end
+
 # the instruction of the intrinsic `name`, with all fast-math flags for the `_fast` ones, as
 # native code
 function fast!(name::Symbol, v::LLVM.Value)
@@ -137,6 +171,16 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
     # `cglobal(target, T)` up to Julia 1.13 (a `:foreignglobal` expression later)
     name === :cglobal && return nothing
     (haskey(CASTS, name) || name === :bitcast) && return emit_cast(fc, name, args)
+    if name === :pointerset && length(args) == 4 && args[1].kind === Inline && args[1].typ <: Ptr
+        # the value as the element type, with a TypeError for others (as native code)
+        T = eltype(args[1].typ)
+        if repr_kind(T) === Inline && args[2].typ !== T
+            v = emit_typecheck!(fc, args[2], T, "pointerset")
+            v === nothing && return nothing
+            v.kind === Bottom && return v
+            args = CGVal[args[1], v, args[3], args[4]]
+        end
+    end
     any(a -> a.kind !== Inline, args) && return nothing
     # arithmetic and comparisons of operands of different types are a run-time error
     if (haskey(INT_BINOPS, name) || haskey(FLOAT_BINOPS, name) || haskey(ICMP, name) ||
