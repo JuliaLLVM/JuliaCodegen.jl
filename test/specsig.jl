@@ -27,6 +27,7 @@ ss_vararg2(a, xs...) = a + sum(xs)
 ss_pick(c::Bool) = c ? 1 : "s"
 ss_pick_refs(c::Bool) = c ? 1.5 : (1, "a")
 ss_pick_boxed(c::Bool) = c ? nothing : "s"
+ss_pick_const(c::Bool) = c ? 2.5 : nothing     # (the constant keeps its box)
 
 # The first function definition's header in native code for `f(::types...)`, without
 # names: the convention, the result and the parameters with their attributes.
@@ -128,7 +129,7 @@ const SS_CASES = [
     (ss_vararg2, (Int, Float64, Int8)),
     # (union results)
     (ss_id, (Union{Nothing,Int},)), (ss_id, (Union{Nothing,Missing},)), (ss_pick, (Bool,)),
-    (ss_pick_boxed, (Bool,)),
+    (ss_pick_boxed, (Bool,)), (ss_pick_const, (Bool,)),
     # (from Julia 1.14 on, native code returns members with references with their roots)
     (VERSION < v"1.14-" ? [(ss_pick_refs, (Bool,))] : [])...,
 ]
@@ -194,6 +195,7 @@ end
             @cgtest run=run ss_pick(c)
             VERSION < v"1.14-" && @cgtest run=run ss_pick_refs(c)
             @cgtest run=run ss_pick_boxed(c)
+            @cgtest run=run ss_pick_const(c)
         end
     end
     @cgtest run=run_through_specsig ss_id(Union{Nothing,Int}[3][1])

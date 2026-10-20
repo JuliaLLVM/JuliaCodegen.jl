@@ -291,8 +291,9 @@ function emit_specsig_call!(fc::FnCtx, sig::SpecSig, callee::LLVM.Value, args::V
 end
 
 # the union value `v` returned in the convention of `sig`, with the buffer `buf` of the
-# data of `:union`: of a member returned unboxed, its type index (and data), else its box
-# and `UNION_BOX_MARKER`
+# data of `:union`: its box if it has one, else for a member returned unboxed, its type
+# index (and data), else its box; a box with `UNION_BOX_MARKER` and the type index of its
+# member, if returned unboxed (0 if not)
 function union_return(fc::FnCtx, sig::SpecSig, v::CGVal, buf)
     b = fc.builder
     U = v.typ
@@ -303,7 +304,7 @@ function union_return(fc::FnCtx, sig::SpecSig, v::CGVal, buf)
     sig.ret === :ghosts && return union_tindex_value(fc, v)
     rty = LLVM.return_type(sig.ft)
     pack(data, t) = LLVM.insert_value!(b, LLVM.insert_value!(b, LLVM.UndefValue(rty), data, 0), t, 1)
-    return union_switch(fc, v, rty; boxed=() -> pack(union_box_value(fc, v), i8(UNION_BOX_MARKER))) do M
+    unboxed() = union_switch(fc, v, rty; boxed=() -> pack(union_box_value(fc, v), i8(UNION_BOX_MARKER))) do M
         k = findfirst(m -> m === M, ms)
         k === nothing && return pack(emit_box(fc, union_member(fc, v, M)), i8(UNION_BOX_MARKER))
         if !is_singleton_type(M)
@@ -311,6 +312,17 @@ function union_return(fc::FnCtx, sig::SpecSig, v::CGVal, buf)
             LLVM.alignment!(st, Base.datatype_alignment(M))
         end
         pack(LLVM.null(T_tracked()), i8(k))
+    end
+    union_has_box(U) || return unboxed()
+    return emit_if(fc, union_isboxed(fc, v), rty; name="union_return", otherwise=unboxed) do
+        t = union_tindex_value(fc, v)
+        k = i8(0)
+        for (i, M) in enumerate(union_members(U))
+            j = findfirst(m -> m === M, ms)
+            j === nothing && continue
+            k = LLVM.select!(b, LLVM.icmp!(b, LLVM.API.LLVMIntEQ, t, i8(i)), i8(j), k)
+        end
+        pack(union_box_value(fc, v), LLVM.or!(b, k, i8(UNION_BOX_MARKER)))
     end
 end
 
