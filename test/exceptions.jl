@@ -89,8 +89,14 @@ end
         @check "call void @ijl_undefined_var_error"
         test_ir(e_assign, (Int,))
     end
-    # a typed global is assigned through the runtime, which converts the value
-    @test occursin("@ijl_apply_generic", test_ir(e_typed_assign, (Int,)))
+    # a typed global with a value of its type through the binding too; one that needs
+    # converting through the runtime
+    @test !occursin("@ijl_apply_generic", test_ir(e_typed_assign, (Int,)))
+    @cgtest e_typed_assign(Int8(3))
+    @cgtest e_typed_assign(2.0)
+    @cgtest e_typed_assign(2.5)       # (InexactError)
+    # undefined names, from the runtime
+    @test occursin("@jl_get_binding_value_seqcst(", test_ir(e_read_undefined, ()))
 end
 
 @testset "code" begin

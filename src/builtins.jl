@@ -319,16 +319,23 @@ end
 
 function nonconst_global(fc::FnCtx, ref::GlobalRef)
     d = direct_binding(fc, ref)
-    if d === nothing
-        return emit_dynamic_call(fc, const_value(fc, Core.getglobal),
-                                 CGVal[const_value(fc, ref.mod), const_value(fc, ref.name)], Any)
-    end
-    bnd, T = d
     b = fc.builder
-    v = LLVM.load!(b, T_tracked(), binding_value_address(fc, bnd))
-    LLVM.ordering!(v, LLVM.API.LLVMAtomicOrderingUnordered)
-    LLVM.alignment!(v, config(fc).target.pointer_size)
-    tbaa!(fc, v, :binding)
+    if d === nothing
+        # another binding (imported, not yet resolved, undefined): its value from the
+        # runtime (`jl_get_binding_value_seqcst`), as native code reads it
+        bnd = convert(Core.Binding, ref)
+        t = literal_pointer(fc, bnd)
+        raw = t isa LLVM.AddrSpaceCastInst ? LLVM.operands(t)[1] : LLVM.addrspacecast!(b, t, T_ptr())
+        gb = declare_runtime(fc.cgm.mod, dialect(fc), :jl_get_binding_value_seqcst)
+        v = LLVM.call!(b, LLVM.function_type(gb), gb, LLVM.Value[raw])
+        T = Any
+    else
+        bnd, T = d
+        v = LLVM.load!(b, T_tracked(), binding_value_address(fc, bnd))
+        LLVM.ordering!(v, LLVM.API.LLVMAtomicOrderingUnordered)
+        LLVM.alignment!(v, config(fc).target.pointer_size)
+        tbaa!(fc, v, :binding)
+    end
     # undefined: an UndefVarError, from the runtime as native code's
     f = current_function(fc)
     err = LLVM.BasicBlock(f, "err")
@@ -343,11 +350,11 @@ function nonconst_global(fc::FnCtx, ref::GlobalRef)
     return boxed(T isa Type ? T : Any, v)
 end
 
-# `global ref = v` of a global of type `Any` through its binding, as native code does;
-# `false` for other bindings
+# `global ref = v` of a global through its binding, as native code does, when `v` is of the
+# global's type (no conversion); `false` for other bindings
 function emit_binding_assignment!(fc::FnCtx, ref::GlobalRef, v::CGVal)
     d = direct_binding(fc, ref)
-    (d === nothing || d[2] !== Any) && return false
+    (d === nothing || !(d[2] isa Type && v.typ <: d[2])) && return false
     bnd, _ = d
     b = fc.builder
     p = emit_box(fc, v)
@@ -374,10 +381,8 @@ function field_index(@nospecialize(T), f::CGVal)
     return nothing
 end
 
-@noinline throw_undefref() = throw(UndefRefError())
-
-# a null check of a reference that is undefined when null: UndefRefError
-undef_check!(fc::FnCtx, p::LLVM.Value) = emit_guard!(fc, nonnull(fc, p), throw_undefref)
+# a null check of a reference that is undefined when null: the runtime's UndefRefError
+undef_check!(fc::FnCtx, p::LLVM.Value) = emit_raise_unless!(fc, nonnull(fc, p), UndefRefError())
 
 # `getfield(x, f, [order], [boundscheck])`
 function emit_getfield(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
@@ -386,13 +391,31 @@ function emit_getfield(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     T = x.typ
     (T isa DataType && isconcretetype(T)) || return nothing
     i = field_index(T, args[2])
-    i === nothing && return nothing
-    # an explicit order: only the plain access of a non-atomic field here
+    if i === nothing
+        (args[2].typ === Int && args[2].kind === Inline && !isconstant(args[2])) || return nothing
+        bc = const_value(fc, true)
+        for a in args[3:end]
+            if a.typ === Bool
+                bc = a
+            elseif !(isconstant(a) && constant_value(a) === :not_atomic)
+                return nothing
+            end
+        end
+        return emit_getfield_unknownidx(fc, x, T, args[2], bc, rt)
+    end
+    # an explicit order: the plain access of a non-atomic field, or the atomic load of an
+    # atomic one (mismatches are the runtime's ConcurrencyViolationError)
+    order = :not_atomic
     for a in args[3:end]
         a.typ === Bool && continue
-        (isconstant(a) && constant_value(a) === :not_atomic) || return nothing
+        (isconstant(a) && constant_value(a) isa Symbol) || return nothing
+        order = constant_value(a)
     end
-    ismutabletype(T) && Base.isfieldatomic(T, i) && return nothing
+    if ismutabletype(T) && Base.isfieldatomic(T, i)
+        order === :not_atomic && return nothing
+        return emit_atomic_getfield(fc, x, T, i, order, rt)
+    end
+    order === :not_atomic || return nothing
     FT = fieldtype(T, i)
     b = fc.builder
     if x.kind === Ghost
@@ -430,6 +453,95 @@ function emit_getfield(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
         return convert_repr(fc, boxed(FT, p), rt)
     end
     return nothing
+end
+
+# `getfield(x, i)` of the field whose index `i` (an `Int`) is only known at run time,
+# with the bounds check of the boundscheck argument `bc` (native code's
+# `emit_getfield_unknownidx`): of the fields of an inline tuple of a single type, or of an
+# object whose fields are all references or all of a single type
+function emit_getfield_unknownidx(fc::FnCtx, x::CGVal, @nospecialize(T), idx::CGVal, bc::CGVal,
+                                  @nospecialize(rt))
+    n = fieldcount(T)
+    n == 0 && return nothing
+    b = fc.builder
+    types = fieldtypes(T)
+    FT = types[1]
+    same = all(t -> t === FT, types)
+    if n == 1
+        lowered = fc -> emit_getfield(fc, CGVal[x, const_value(fc, 1)], rt)
+    elseif x.kind === Ghost || (same && repr_kind(FT) === Ghost)
+        same || return nothing
+        lowered = fc -> convert_repr(fc, ghost(FT, something(ghost_value(FT))), rt)
+    elseif x.kind === Inline
+        lay = layout(fc, T)
+        (lay.llvm isa LLVM.ArrayType || lay.llvm isa LLVM.VectorType) || return nothing
+        # (references, of any types, or values of a single type)
+        refs = all(i -> field_storage(T, i) === FieldPointer, 1:n)
+        (refs || same) || return nothing
+        lowered = fc -> begin
+            v = inline_element(fc, x, lay, refs, n, idx; align=Base.datatype_alignment(FT))
+            convert_repr(fc, refs ? boxed(Union{types...}, v) : inline(FT, v), rt)
+        end
+    elseif x.kind === Boxed
+        ismutabletype(T) && T.name.atomicfields != C_NULL && return nothing
+        storage = [field_storage(T, i) for i in 1:n]
+        if all(==(FieldPointer), storage)
+            lowered = fc -> begin
+                p = LLVM.inbounds_gep!(b, T_tracked(), derived(fc, x.V), [LLVM.sub!(b, idx.V, iptr(fc, 1))])
+                v = tbaa!(fc, LLVM.load!(b, T_tracked(), p; align=config(fc).target.pointer_size), field_tbaa(fc, T))
+                any(i -> maybe_undef_field(T, i), 1:n) && undef_check!(fc, v)
+                convert_repr(fc, boxed(Union{types...}, v), rt)
+            end
+        elseif same && all(==(FieldInline), storage) &&
+               !(has_references(FT) && any(i -> maybe_undef_field(T, i), 1:n))
+            stride = fieldoffset(T, 2) - fieldoffset(T, 1)
+            lowered = fc -> begin
+                off = LLVM.mul!(b, LLVM.sub!(b, idx.V, iptr(fc, 1)), iptr(fc, stride))
+                p = LLVM.inbounds_gep!(b, LLVM.Int8Type(), derived(fc, x.V), [off])
+                v = LLVM.load!(b, value_type(fc, FT), p; align=field_alignment(fc, T, FT))
+                convert_repr(fc, inline(FT, tbaa!(fc, v, field_tbaa(fc, T))), rt)
+            end
+        else
+            return nothing
+        end
+    else
+        return nothing
+    end
+    bounds_check!(fc, LLVM.sub!(b, idx.V, iptr(fc, 1)), iptr(fc, n), bc, x, idx; unboxed=true)
+    return lowered(fc)
+end
+
+# the element `idx` (1-based, in bounds) of the inline tuple `x` with the layout `lay` (an
+# LLVM array or vector of `n` elements, references if `refs`, aligned to `align`):
+# extracted from a vector, selected among references or a few values not in memory, or
+# loaded from memory (the memory it was loaded from; for a constant, a private global, as
+# native code's `value_to_pointer`; or a stack slot)
+function inline_element(fc::FnCtx, x::CGVal, lay::Layout, refs::Bool, n::Int, idx::CGVal;
+                        align::Integer)
+    b = fc.builder
+    i0 = LLVM.sub!(b, idx.V, iptr(fc, 1))
+    if lay.llvm isa LLVM.VectorType
+        return LLVM.extract_element!(b, x.V, LLVM.trunc!(b, i0, LLVM.Int32Type()))
+    elseif refs || has_references(x.typ) ||
+           (n <= 3 && x.mem === nothing && !(isconstant(x) && x.V isa LLVM.Constant))
+        v = LLVM.extract_value!(b, x.V, 0)
+        for i in 1:n-1
+            c = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, i0, iptr(fc, i))
+            v = LLVM.select!(b, c, LLVM.extract_value!(b, x.V, i), v)
+        end
+        return v
+    end
+    if x.mem !== nothing
+        mem, tb = x.mem, :const
+    elseif isconstant(x) && x.V isa LLVM.Constant
+        mem, tb = constant_memory!(fc.cgm, x.V, Base.datatype_alignment(x.typ)), :const
+    else
+        mem, tb = entry_alloca!(fc, lay.llvm; align=Base.datatype_alignment(x.typ)), :stack
+        tbaa!(fc, LLVM.store!(b, x.V, mem), :stack)
+    end
+    et = LLVM.element_type(lay.llvm)
+    p = LLVM.inbounds_gep!(b, et, mem, [i0])
+    return tbaa!(fc, LLVM.load!(b, et, p; align), tb)
 end
 
 # `setfield!(x, f, v, [order])` of a non-atomic field
@@ -516,7 +628,7 @@ function emit_throw(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     length(args) == 1 || return nothing
     b = fc.builder
     f = runtime_function(fc, :jl_throw)
-    p = LLVM.addrspacecast!(b, emit_box(fc, args[1]), LLVM.PointerType(AddrSpace.CalleeRooted))
+    p = callee_rooted(fc, emit_box(fc, args[1]))
     LLVM.call!(b, LLVM.function_type(f), f, LLVM.Value[p])
     return emit_unreachable!(fc)
 end
@@ -551,6 +663,123 @@ function emit_getglobal(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     return convert_repr(fc, nonconst_global(fc, ref), rt)
 end
 
+# the atomic load with `order` of the atomic field `i` of the object `x` of type `T`: of a
+# bits type of 1 to 8 bytes, or a reference
+function emit_atomic_getfield(fc::FnCtx, x::CGVal, @nospecialize(T), i::Int, order::Symbol,
+                              @nospecialize(rt))
+    x.kind === Boxed || return nothing
+    ord = atomic_ordering(order; load=true)
+    ord === nothing && return nothing
+    FT = fieldtype(T, i)
+    s = field_storage(T, i)
+    b = fc.builder
+    if s === FieldPointer
+        ty, W = T_tracked(), config(fc).target.pointer_size
+    elseif s === FieldInline && isbitstype(FT) && sizeof(FT) in (1, 2, 4, 8) && repr_kind(FT) === Inline
+        ty, W = LLVM.IntType(8 * sizeof(FT)), sizeof(FT)
+    else
+        return nothing
+    end
+    v = LLVM.load!(b, ty, field_address(fc, x.V, T, i))
+    LLVM.ordering!(v, ord)
+    LLVM.alignment!(v, W)
+    tbaa!(fc, v, field_tbaa(fc, T))
+    if s === FieldPointer
+        maybe_undef_field(T, i) && undef_check!(fc, v)
+        return convert_repr(fc, boxed(FT, v), rt)
+    end
+    return convert_repr(fc, inline(FT, llvmcall_value(fc, v, value_type(fc, FT))), rt)
+end
+
+@noinline throw_modify_type(@nospecialize(T), @nospecialize(x)) =
+    throw(TypeError(:modifyfield!, "", T, x))
+
+"""
+    JuliaCodegen.emit_invoke_modify(fc, ex, typ) -> CGVal
+
+`Expr(:invoke_modify, ci, modifyfield!, obj, field, op, x, order)`: `modifyfield!` with
+the operation `op` known to be the CodeInstance `ci`. For an atomic field of a bits type of
+1 to 8 bytes, or of a reference, a loop of the atomic compare-and-exchange of the field
+with `op(old, x)`, as native code does; otherwise, the call of `modifyfield!`.
+"""
+function emit_invoke_modify(fc::FnCtx, ex::Expr, @nospecialize(typ))
+    args = CGVal[operand(fc, a) for a in ex.args[2:end]]
+    any(a -> a.kind === Bottom, args) && return bottom()
+    # (the operation's result type, of its CodeInstance)
+    opt = ex.args[1] isa Core.CodeInstance ? ex.args[1].rettype : Any
+    r = length(args) == 6 ? emit_modify_loop(fc, invoke_target(ex.args[1]), opt, args, typ) : nothing
+    r === nothing || return r
+    return emit_dynamic_call(fc, args[1], args[2:end], typ)
+end
+
+function emit_modify_loop(fc::FnCtx, mi::Core.MethodInstance, @nospecialize(opt),
+                          args::Vector{CGVal}, @nospecialize(typ))
+    _, obj, fld, op, x, ord = args
+    T = obj.typ
+    (obj.kind === Boxed && T isa DataType && ismutabletype(T) && isconcretetype(T)) || return nothing
+    i = field_index(T, fld)
+    (i !== nothing && isconstant(ord) && constant_value(ord) isa Symbol) || return nothing
+    Base.isfieldatomic(T, i) || return nothing
+    order = constant_value(ord)
+    success = atomic_ordering(order; load=true)
+    (success === nothing || order in (:not_atomic, :unordered)) && return nothing
+    FT = fieldtype(T, i)
+    # (a result that can't be stored: the runtime's TypeError)
+    typeintersect(opt, FT) === Union{} && return nothing
+    s = field_storage(T, i)
+    b = fc.builder
+    isref = s === FieldPointer
+    if isref
+        ity = T_tracked()
+    elseif s === FieldInline && isbitstype(FT) && sizeof(FT) in (1, 2, 4, 8) && repr_kind(FT) === Inline
+        ity = LLVM.IntType(8 * sizeof(FT))
+    else
+        return nothing
+    end
+    W = isref ? config(fc).target.pointer_size : sizeof(FT)
+    addr = field_address(fc, obj.V, T, i)
+    value_of(v) = isref ? boxed(FT, v) : inline(FT, llvmcall_value(fc, v, value_type(fc, FT)))
+    bits_of(v::CGVal) = isref ? emit_box(fc, v) : llvmcall_value(fc, convert_repr(fc, v, FT).V, ity)
+    init = LLVM.load!(b, ity, addr)
+    LLVM.ordering!(init, LLVM.API.LLVMAtomicOrderingMonotonic)
+    LLVM.alignment!(init, W)
+    tbaa!(fc, init, field_tbaa(fc, T))
+    f = current_function(fc)
+    from = current_block(b)
+    loop = LLVM.BasicBlock(f, "xchg")
+    done = LLVM.BasicBlock(f, "done_xchg")
+    LLVM.br!(b, loop)
+    LLVM.position!(b, LLVM.at_end(loop))
+    old = LLVM.phi!(b, ity)
+    # (a reference field may be undefined: UndefRefError)
+    isref && undef_check!(fc, old)
+    oldv = value_of(old)
+    # the new value: `op(old, x)`, of the field's type
+    newv = emit_invoke_call(fc, mi, CGVal[op, oldv, x], opt)
+    newv.kind === Bottom && return newv
+    if !(newv.typ <: FT)
+        ok = emit_isa(fc, newv, FT)
+        ok === nothing && return nothing
+        emit_guard!(fc, ok, throw_modify_type, const_value(fc, FT), newv)
+    end
+    newbits = bits_of(newv)
+    r = LLVM.atomic_cmpxchg!(b, addr, old, newbits, success, LLVM.API.LLVMAtomicOrderingMonotonic;
+                             align=W)
+    tbaa!(fc, r, field_tbaa(fc, T))
+    loaded = LLVM.extract_value!(b, r, 0)
+    ok = LLVM.extract_value!(b, r, 1)
+    tail = current_block(b)
+    append!(LLVM.incoming(old), [(init, from), (loaded, tail)])
+    LLVM.br!(b, ok, done, loop)
+    LLVM.position!(b, LLVM.at_end(done))
+    isref && write_barrier!(b, fc.cgm.mod, dialect(fc), obj.V, LLVM.addrspacecast!(b, addr, T_derived()), newbits)
+    newfinal = isref ? boxed(FT, newbits) : value_of(newbits)
+    P = Pair{FT,FT}
+    pair = repr_kind(P) === Inline ? emit_new_inline(fc, P, CGVal[oldv, newfinal]) : nothing
+    pair === nothing && return nothing
+    return convert_repr(fc, pair, typ)
+end
+
 # `setglobal!(m, s, x, [order])` of a global of type `Any` with the default (release) order,
 # through its binding
 function emit_setglobal!(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
@@ -583,6 +812,38 @@ function emit_isdefined(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     return nothing
 end
 
+# `Core.svec(xs...)`: allocated inline, as native code (from Julia 1.12 on), with the
+# elements boxed first
+function emit_svec(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
+    isempty(args) && return const_value(fc, Core.svec())
+    b = fc.builder
+    W = config(fc).target.pointer_size
+    elems = LLVM.Value[emit_box(fc, a) for a in args]
+    sv = call_op!(fc, "julia.gc_alloc_obj", fc.current_task,
+                  LLVM.ConstantInt(LLVM.Int64Type(), W * (length(args) + 1)),
+                  type_tag(fc, Core.SimpleVector))
+    data = derived(fc, sv)
+    LLVM.store!(b, iptr(fc, length(args)), data; align=W)
+    for (i, e) in enumerate(elems)
+        addr = LLVM.inbounds_gep!(b, LLVM.Int8Type(), data, [iptr(fc, W * i)])
+        st = LLVM.store!(b, e, addr; align=W)
+        LLVM.ordering!(st, LLVM.API.LLVMAtomicOrderingRelease)
+        write_barrier!(b, fc.cgm.mod, dialect(fc), sv, addr, e)
+    end
+    return boxed(Core.SimpleVector, sv)
+end
+
+# `Core._svec_len(sv)`: the length, the first word
+function emit_svec_len(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
+    length(args) == 1 || return nothing
+    sv = args[1]
+    isconstant(sv) && constant_value(sv) isa Core.SimpleVector &&
+        return const_value(fc, length(constant_value(sv)))
+    sv.typ === Core.SimpleVector || return nothing
+    W = config(fc).target.pointer_size
+    return inline(Int, LLVM.load!(fc.builder, iptr_type(fc), derived(fc, emit_box(fc, sv)); align=W))
+end
+
 const BUILTINS = IdDict{Any,Function}(
     Core.:(===) => (fc, args, rt) -> length(args) == 2 ? emit_egal(fc, args[1], args[2]) : nothing,
     Core.ifelse => emit_ifelse,
@@ -597,6 +858,8 @@ const BUILTINS = IdDict{Any,Function}(
     Core.sizeof => emit_sizeof,
     Core.getglobal => emit_getglobal,
     Core.setglobal! => emit_setglobal!,
+    Core.svec => emit_svec,
+    Core._svec_len => emit_svec_len,
 )
 
 """

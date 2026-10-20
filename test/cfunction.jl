@@ -83,11 +83,12 @@ end
         @check "ret double"
         ir
     end
-    # the jlcall convention for results it doesn't call in the specsig convention
+    # a union result in the specsig convention, as native code's: the type index, and the
+    # box or the data in a buffer
     @test @filecheck begin
         @check_label "define internal ptr addrspace(10) @jlcapi_cf_maybe"
         @check "@jl_get_abi_converter"
-        @check "call ptr addrspace(10) (ptr, ptr addrspace(10), ...) @julia.call(ptr %"
+        @check "call swiftcc { ptr addrspace(10), i8 } %"
         test_ir(cf_call_maybe, (Int,))
     end
 end

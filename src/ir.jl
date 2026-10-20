@@ -32,7 +32,7 @@ jlcall entry wrapper named `name`. The entry function itself must be supported: 
 function emit_entry!(cgm::CGModule, @nospecialize(tt::Type); name::AbstractString=unique_name(cgm, "jfptr"))
     mi = method_instance(tt, cgm.world)
     ir, rt = cgm.ir_source(mi, cgm.world)
-    info = declare_function!(cgm, mi, signature_argtypes(mi), rt)
+    info = declare_function!(cgm, mi, function_argtypes(mi), rt)
     push!(cgm.worklist, (info, ir))
     process_worklist!(cgm; strict=mi)
     f = emit_jlcall_wrapper!(cgm, info, name)

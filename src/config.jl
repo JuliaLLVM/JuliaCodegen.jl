@@ -22,7 +22,9 @@ The configuration of the code generator, which generates code for the running Ju
 - `debug_info`: the debug information to emit, as the `debug_info_kind` of Julia's
   `CodegenParams`: `:none`, or line tables (a subprogram per function and the location
   of every statement, with inlined frames) in a compile unit of the emission kind
-  `:line_tables`, `:directives` or `:full`.
+  `:line_tables`, `:directives` or `:full`, or `:no_debug`, which native code emits for
+  the kind `NoDebug` (unless Julia runs with `-g0`): for tools reading locations, like
+  GPUCompiler's error messages, which strip them later.
 
 The facts about the running Julia's runtime are `config.runtime`, see
 [`RuntimeFacts`](@ref JuliaCodegen.RuntimeFacts).
@@ -47,8 +49,8 @@ struct CodegenConfig
             value in FAILURE_POLICIES ||
                 throw(ArgumentError("invalid $name policy :$value; expected one of $(join(FAILURE_POLICIES, ", "))"))
         end
-        debug_info in (:none, :line_tables, :directives, :full) ||
-            throw(ArgumentError("invalid debug_info :$debug_info; expected none, line_tables, directives or full"))
+        debug_info in (:none, :no_debug, :line_tables, :directives, :full) ||
+            throw(ArgumentError("invalid debug_info :$debug_info; expected none, no_debug, line_tables, directives or full"))
         new(target, dialect, runtime_facts(), on_unsupported, on_internal_error, gcstack_arg,
             safepoint_on_entry, debug_info)
     end

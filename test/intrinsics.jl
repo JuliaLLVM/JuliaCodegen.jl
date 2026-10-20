@@ -21,7 +21,25 @@ i_fence() = (Core.Intrinsics.atomic_fence(:sequentially_consistent); nothing)
 i_fence2() = (Core.Intrinsics.atomic_fence(:sequentially_consistent, :system); nothing)
 # an intrinsic with the wrong number of arguments, which inference knows throws
 i_bad_intrinsic(x) = Core.Intrinsics.add_int(x)
+i_store_any(v::Vector{Int}, x) = GC.@preserve v (unsafe_store!(pointer(v), x); v[1])
+i_fast(x, y) = (Base.FastMath.mul_fast(x, y), Base.FastMath.div_fast(x, y),
+                Base.FastMath.min_fast(x, y), Base.FastMath.max_fast(x, y), Base.FastMath.sqrt_fast(x),
+                Base.FastMath.lt_fast(x, y), Base.FastMath.neg_fast(x))
 i_llvmcall(x::Int32) = Base.llvmcall("%r = add i32 %0, 1\nret i32 %r", Int32, Tuple{Int32}, x)
+# (pointers are integers of their size in the IR, as native code passes them)
+i_llvmcall_load(p::Ptr{Int32}) = Base.llvmcall("""
+    %p = inttoptr i64 %0 to i32*
+    %v = load i32, i32* %p, align 4
+    ret i32 %v""", Int32, Tuple{Ptr{Int32}}, p)
+i_llvmcall_ptr(p::Ptr{Int32}) = Base.llvmcall("%q = add i64 %0, 4\nret i64 %q", Ptr{Int32}, Tuple{Ptr{Int32}}, p)
+# (a struct of fields of one type, which Base.llvmcall passes as an LLVM array)
+struct IPair; a::Int64; b::Int64; end
+i_llvmcall_struct(p::IPair) = Base.llvmcall("""
+    %a = extractvalue [2 x i64] %0, 0
+    %b = extractvalue [2 x i64] %0, 1
+    %s = add i64 %a, %b
+    ret i64 %s""", Int64, Tuple{IPair}, p)
+i_llvmcall_ptrs(v::Vector{Int32}) = GC.@preserve v (i_llvmcall_load(pointer(v)), i_llvmcall_ptr(pointer(v)) - pointer(v))
 i_poly(x) = 3x^2 - 2x + 1
 i_loop(n) = (s = 0; for i in 1:n; s += i; end; s)
 i_dynamic(f, x) = f(x)
@@ -95,6 +113,24 @@ end
     @cgtest i_fence2()
     @cgtest i_bad_intrinsic(1)
     @cgtest i_llvmcall(Int32(41))
+    @cgtest i_fast(2.0f0, 8.0f0)
+    # a value of another type than the element: checked (TypeError), as native code
+    @cgtest i_store_any([1], Any[5][1])
+    @cgtest i_store_any([1], Any[5.5][1])     # (InexactError, from `convert`)
+    @cgtest i_store_any([1], Any["x"][1])     # (MethodError, from `convert`)
+    @test occursin("@ijl_type_error(", test_ir(unsafe_store!, (Ptr{Int}, Any, Int)))
+    # the fast-math flags of native code
+    @test @filecheck begin
+        @check "fmul fast float"
+        @check "fdiv fast float"
+        @check "call fast float @llvm.minimum.f32"
+        @check "call fast float @llvm.maximum.f32"
+        @check "call fast float @llvm.sqrt.f32"
+        @check "fcmp fast olt float"
+        test_ir(i_fast, (Float32, Float32))
+    end
+    @cgtest i_llvmcall_ptrs(Int32[7, 8])
+    @cgtest i_llvmcall_struct(IPair(3, 4))
 end
 
 @testset "code" begin

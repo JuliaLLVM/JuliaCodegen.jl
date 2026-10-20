@@ -37,6 +37,9 @@ function u_sum_found(v::Vector{Int})
     return s
 end
 
+@noinline u_produce(c::Bool, a::Int32) = c ? a : 2.5
+u_box_const(c::Bool) = Any[u_produce(c, Int32(7))][1]
+
 @testset "unions" begin
 
 @testset "members" begin
@@ -98,12 +101,26 @@ end
     @test @filecheck begin
         @check_label "define internal"
         @check_not "julia.gc_alloc_obj"
-        @check_label "define ptr addrspace(10) @jctest_entry"
+        @check_label "define nonnull ptr addrspace(10) @jctest_entry"
         print(test_ir(u_maybe, (Bool, Int)))
     end
     @test @filecheck begin
         @check "phi { [8 x i8], i8, ptr addrspace(10) }"
         print(test_ir(u_phi, (Bool, Bool, Int)))
+    end
+end
+
+@testset "constants keep their box" begin
+    # an isbits constant in a union keeps the object of the constant as its box
+    # (JuliaLang/julia#55045), as native code: boxing it allocates nothing
+    @cgtest u_box_const(true)
+    @cgtest u_box_const(false)
+    p() = ccall(:jl_value_ptr, Ptr{Cvoid}, (Any,), cgrun(u_box_const, false))
+    @test p() == p()
+    @test @filecheck begin
+        @check_label "define internal { [8 x i8], i8, ptr addrspace(10) } @julia_u_produce"
+        @check "insertvalue { [8 x i8], i8, ptr addrspace(10) } %{{[0-9]+}}, i8 -12{{[0-9]}}, 1"
+        test_ir(u_produce, (Bool, Int32))
     end
 end
 

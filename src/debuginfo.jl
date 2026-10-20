@@ -1,11 +1,11 @@
-# Debug information: the line tables of native code (`debug_info_kind` above `NoDebug`):
+# Debug information: the line tables of native code (`debug_info_level` above 0):
 # a compile unit for the module, a subprogram for every function, and for every
 # statement the location of its line, with the functions inlined into it as inlined frames
 # (from the IR's line information). Tools (and GPUCompiler's error messages) read
 # backtraces from them. There is no information about variables or types.
 
 # the emission kinds of `debug_info` (`DICompileUnit::DebugEmissionKind`)
-const DEBUG_EMISSION_KINDS = (none=0, full=1, line_tables=2, directives=3)
+const DEBUG_EMISSION_KINDS = (no_debug=0, full=1, line_tables=2, directives=3)
 
 """
     JuliaCodegen.DebugInfo
@@ -82,7 +82,8 @@ frame_name(@nospecialize(m)) =
     JuliaCodegen.debug_function!(fc, f; name, file, line)
 
 Give the function `f` that `fc` emits a subprogram (`name` at `file:line`, by default
-those of the method being compiled), and the builder its location, for the instructions
+those of the method being compiled; with the linkage name `cgm.debug_linkage[f]`, if any,
+else the function's), and the builder its location, for the instructions
 emitted before the first statement and in functions without IR (entries, stubs).
 """
 function debug_function!(fc::FnCtx, f::LLVM.Function; name=nothing, file=nothing, line=nothing)
@@ -92,7 +93,7 @@ function debug_function!(fc::FnCtx, f::LLVM.Function; name=nothing, file=nothing
     name = something(name, frame_name(m))
     file = something(file, m isa Method ? m.file : :none)
     line = something(line, m isa Method ? m.line : 0)
-    sp = subprogram!(di, name, file, line, LLVM.name(f))
+    sp = subprogram!(di, name, file, line, get(fc.cgm.debug_linkage, f, LLVM.name(f)))
     f.subprogram = sp
     fc.subprogram = sp
     LLVM.debug_location!(fc.builder, LLVM.DILocation(max(Int(line), 0), 0, sp))
@@ -107,6 +108,7 @@ function statement_location!(fc::FnCtx, idx::Int)
     frames = Base.IRShow.buildLineInfoNode(fc.ir.debuginfo, fc.info.mi, idx)
     isempty(frames) && return    # (keep the previous location)
     loc = nothing
+    n = length(frames)
     for (k, fr) in enumerate(frames)
         scope = if k == 1
             fc.subprogram
@@ -116,7 +118,10 @@ function statement_location!(fc::FnCtx, idx::Int)
                 subprogram!(di, name, fr.file, 0)
             end
         end
-        loc = LLVM.DILocation(max(Int(fr.line), 0), 0, scope, loc)
+        # (from Julia 1.14 on, the column of the innermost location is the statement, as
+        # native code encodes it: tools map errors in the LLVM IR back to the Julia IR by it)
+        col = k == n && config(fc).dialect.minor >= v"1.14" ? idx : 0
+        loc = LLVM.DILocation(max(Int(fr.line), 0), col, scope, loc)
     end
     LLVM.debug_location!(fc.builder, loc)
 end

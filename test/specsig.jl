@@ -22,6 +22,15 @@ ss_box(x::Int) = Ref(x)
 ss_throw(x) = throw(ArgumentError("ss_throw $x"))
 ss_vec(v::SS_V4) = map(x -> VecElement(x.value * 2f0), v)
 @noinline ss_vararg(xs...) = length(xs)
+ss_vararg2(a, xs...) = a + sum(xs)
+# unions: data and singletons unboxed, other members boxed (before Julia 1.14, also
+# those with references)
+ss_pick(c::Bool) = c ? 1 : "s"
+ss_pick_refs(c::Bool) = c ? 1.5 : (1, "a")
+ss_pick_mid(c::Bool) = c ? Int8(1) : (Int8(2), "a", Int16(3))   # (a reference between data)
+ss_pick_ptrs(c::Bool) = c ? nothing : ("a", :b)                  # (only references)
+ss_pick_boxed(c::Bool) = c ? nothing : "s"
+ss_pick_const(c::Bool) = c ? 2.5 : nothing     # (the constant keeps its box)
 
 # The first function definition's header in native code for `f(::types...)`, without
 # names: the convention, the result and the parameters with their attributes.
@@ -119,6 +128,12 @@ const SS_CASES = [
     (ss_mix, (Int8, Bool, UInt16, Float32, SS_Pair, Nothing, String)),
     (ss_fst, (Int, SS_Empty)), (ss_dup, (Int,)), (ss_widen, (Int64,)), (ss_maybe, (Union{Nothing,Int},)),
     (ss_box, (Int,)), (ss_throw, (Int,)), (ss_vec, (SS_V4,)),
+    # (varargs methods, with their arguments one by one)
+    (ss_vararg2, (Int, Float64, Int8)),
+    # (union results)
+    (ss_id, (Union{Nothing,Int},)), (ss_id, (Union{Nothing,Missing},)), (ss_pick, (Bool,)),
+    (ss_pick_boxed, (Bool,)), (ss_pick_const, (Bool,)), (ss_pick_refs, (Bool,)),
+    (ss_pick_mid, (Bool,)), (ss_pick_ptrs, (Bool,)),
 ]
 
 @testset "specsig" begin
@@ -140,14 +155,29 @@ const SS_CASES = [
             ir
         end
     end
+    # from Julia 1.14 on, the references of a union member are returned in a roots
+    # argument, which GC lowering knows by its attribute
+    if test_config().dialect.gc_return_roots === :attribute
+        @test @filecheck begin
+            @check "define swiftcc { ptr addrspace(10), i8 } @ss_entry(ptr {{.*}}dereferenceable(16) %0, ptr {{.*}}dereferenceable(16) \"julia.return_roots\"=\"2\" %1,"
+            @check "store ptr addrspace(10) {{%.*}}, ptr {{%.*}}"
+            @check "store ptr addrspace(10) {{%.*}}, ptr {{%.*}}"
+            specsig_ir(ss_pick_ptrs, (Bool,))
+        end
+    end
 end
 
 @testset "unsupported" begin
-    # inline values with references are passed with their roots, unions returned with
-    # their payload separately
+    # inline values with references are passed with their roots
     @test_throws JuliaCodegen.Unsupported specsig_header(ss_id, (SS_Ref,))
-    @test_throws JuliaCodegen.Unsupported specsig_header(ss_id, (Union{Nothing,Int},))
-    @test_throws JuliaCodegen.Unsupported specsig_header(ss_vararg, (Int, Int))
+    # (a signature that ends in `Vararg`: the jlcall convention)
+    @dispose ctx=LLVM.Context() mod=LLVM.Module("x") begin
+        cgm = JuliaCodegen.CGModule(mod, test_config())
+        m = only(methods(ss_vararg))
+        mi = Base.Compiler.specialize_method(m, Tuple{typeof(ss_vararg), Vararg{Int}}, Core.svec())
+        info = JuliaCodegen.get_function!(cgm, mi)
+        @test_throws JuliaCodegen.Unsupported JuliaCodegen.emit_specsig_wrapper!(cgm, info, "x")
+    end
 end
 
 @testset "calls through the convention" begin
@@ -170,7 +200,17 @@ end
         @cgtest run=run ss_box(10)
         @cgtest run=run ss_throw(11)
         @cgtest run=run ss_vec(map(VecElement, (1f0, 2f0, 3f0, 4f0)))
+        for c in (true, false)
+            @cgtest run=run ss_pick(c)
+            @cgtest run=run ss_pick_refs(c)
+            @cgtest run=run ss_pick_mid(c)
+            @cgtest run=run ss_pick_ptrs(c)
+            @cgtest run=run ss_pick_boxed(c)
+            @cgtest run=run ss_pick_const(c)
+        end
     end
+    @cgtest run=run_through_specsig ss_id(Union{Nothing,Int}[3][1])
+    @cgtest run=run_through_specsig ss_id(Union{Nothing,Missing}[missing][1])
     # (native code for these returns a constant, without code in the convention)
     @cgtest run=run_through_specsig ss_id(SS_Empty())
     @cgtest run=run_through_specsig ss_id(nothing)

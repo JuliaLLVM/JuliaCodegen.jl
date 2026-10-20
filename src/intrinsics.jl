@@ -63,6 +63,46 @@ const CHECKED_ARITH = Dict{Symbol,String}(
 
 const CHECKED_DIVREM = (:checked_sdiv_int, :checked_udiv_int, :checked_srem_int, :checked_urem_int)
 
+"""
+    JuliaCodegen.emit_typecheck!(fc, x, T, context) -> Union{CGVal,Nothing}
+
+The value `x` as a value of type `T`, checked at run time as native code's
+`emit_typecheck`: a `TypeError` from the runtime (`jl_type_error(context, T, x)`) when it
+isn't one. `nothing` if the check needs a subtype test.
+"""
+function emit_typecheck!(fc::FnCtx, x::CGVal, @nospecialize(T), context::String)
+    x.typ <: T && return convert_repr(fc, x, T)
+    b = fc.builder
+    function type_error()
+        err = declare_runtime(fc.cgm.mod, dialect(fc), :jl_type_error)
+        LLVM.call!(b, LLVM.function_type(err), err,
+                   LLVM.Value[cstring!(fc.cgm, context), literal_pointer(fc, T), callee_rooted(fc, emit_box(fc, x))])
+        LLVM.unreachable!(b)
+    end
+    if typeintersect(x.typ, T) === Union{}
+        type_error()
+        LLVM.position!(b, LLVM.at_end(LLVM.BasicBlock(current_function(fc), "after_type_error")))
+        return bottom()
+    end
+    ok = emit_isa(fc, x, T)
+    ok === nothing && return nothing
+    f = current_function(fc)
+    fail = LLVM.BasicBlock(f, "type_error")
+    pass = LLVM.BasicBlock(f, "pass")
+    LLVM.br!(b, ok, pass, fail)
+    LLVM.position!(b, LLVM.at_end(fail))
+    type_error()
+    LLVM.position!(b, LLVM.at_end(pass))
+    return convert_repr(fc, x.kind === Boxed ? boxed(T, x.V) : x, T)
+end
+
+# the instruction of the intrinsic `name`, with all fast-math flags for the `_fast` ones, as
+# native code
+function fast!(name::Symbol, v::LLVM.Value)
+    endswith(String(name), "_fast") && v isa LLVM.Instruction && (v.fast_math.fast = true)
+    return v
+end
+
 isfloat_type(t::LLVM.LLVMType) =
     t isa Union{LLVM.HalfType,LLVM.BFloatType,LLVM.FloatType,LLVM.DoubleType}
 float_bits(t::LLVM.LLVMType) = t isa LLVM.DoubleType ? 64 : t isa LLVM.FloatType ? 32 : 16
@@ -130,6 +170,16 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
     # `cglobal(target, T)` up to Julia 1.13 (a `:foreignglobal` expression later)
     name === :cglobal && return nothing
     (haskey(CASTS, name) || name === :bitcast) && return emit_cast(fc, name, args)
+    if name === :pointerset && length(args) == 4 && args[1].kind === Inline && args[1].typ <: Ptr
+        # the value as the element type, with a TypeError for others (as native code)
+        T = eltype(args[1].typ)
+        if repr_kind(T) === Inline && args[2].typ !== T
+            v = emit_typecheck!(fc, args[2], T, "pointerset")
+            v === nothing && return nothing
+            v.kind === Bottom && return v
+            args = CGVal[args[1], v, args[3], args[4]]
+        end
+    end
     any(a -> a.kind !== Inline, args) && return nothing
     # arithmetic and comparisons of operands of different types are a run-time error
     if (haskey(INT_BINOPS, name) || haskey(FLOAT_BINOPS, name) || haskey(ICMP, name) ||
@@ -142,17 +192,17 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
     if haskey(INT_BINOPS, name)
         return iresult(fc, INT_BINOPS[name](b, xs[1], xs[2]), rt)
     elseif haskey(FLOAT_BINOPS, name)
-        return iresult(fc, FLOAT_BINOPS[name](b, xs[1], xs[2]), rt)
+        return iresult(fc, fast!(name, FLOAT_BINOPS[name](b, xs[1], xs[2])), rt)
     elseif haskey(ICMP, name)
         return iresult(fc, LLVM.icmp!(b, ICMP[name], xs[1], xs[2]), Bool)
     elseif haskey(FCMP, name)
-        return iresult(fc, LLVM.fcmp!(b, FCMP[name], xs[1], xs[2]), Bool)
+        return iresult(fc, fast!(name, LLVM.fcmp!(b, FCMP[name], xs[1], xs[2])), Bool)
     elseif name === :neg_int
         return iresult(fc, LLVM.neg!(b, xs[1]), rt)
     elseif name === :not_int
         return iresult(fc, LLVM.not!(b, xs[1]), rt)
     elseif name === :neg_float || name === :neg_float_fast
-        return iresult(fc, LLVM.fneg!(b, xs[1]), rt)
+        return iresult(fc, fast!(name, LLVM.fneg!(b, xs[1])), rt)
     elseif name === :fpiseq
         return emit_fpiseq(fc, args, xs)
     elseif name in (:shl_int, :lshr_int, :ashr_int)
@@ -162,7 +212,7 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
         neg = LLVM.icmp!(b, LLVM.API.LLVMIntSLT, y, LLVM.ConstantInt(LLVM.value_type(y), 0))
         return iresult(fc, LLVM.select!(b, neg, LLVM.neg!(b, x), x), rt)
     elseif haskey(FLOAT_UNARY, name)
-        return iresult(fc, call_llvm_intrinsic!(fc, FLOAT_UNARY[name], [LLVM.value_type(xs[1])], xs), rt)
+        return iresult(fc, fast!(name, call_llvm_intrinsic!(fc, FLOAT_UNARY[name], [LLVM.value_type(xs[1])], xs)), rt)
     elseif name === :copysign_float
         return iresult(fc, call_llvm_intrinsic!(fc, "llvm.copysign", [LLVM.value_type(xs[1])], xs), rt)
     elseif name === :fma_float
@@ -171,9 +221,9 @@ function emit_intrinsic(fc::FnCtx, f::Core.IntrinsicFunction, args::Vector{CGVal
         return iresult(fc, call_llvm_intrinsic!(fc, "llvm.fma", [LLVM.value_type(xs[1])], xs), rt)
     elseif name === :muladd_float
         return iresult(fc, call_llvm_intrinsic!(fc, "llvm.fmuladd", [LLVM.value_type(xs[1])], xs), rt)
-    elseif name === :min_float || name === :max_float
-        nm = name === :min_float ? "llvm.minimum" : "llvm.maximum"
-        return iresult(fc, call_llvm_intrinsic!(fc, nm, [LLVM.value_type(xs[1])], xs), rt)
+    elseif name in (:min_float, :max_float, :min_float_fast, :max_float_fast)
+        nm = name in (:min_float, :min_float_fast) ? "llvm.minimum" : "llvm.maximum"
+        return iresult(fc, fast!(name, call_llvm_intrinsic!(fc, nm, [LLVM.value_type(xs[1])], xs)), rt)
     elseif haskey(INT_UNARY, name)
         return emit_int_unary(fc, name, xs, rt)
     elseif haskey(CHECKED_ARITH, name)
@@ -303,7 +353,7 @@ function emit_checked_divrem(fc::FnCtx, name::Symbol, xs::Vector{LLVM.Value}, @n
         ismin = LLVM.icmp!(b, LLVM.API.LLVMIntEQ, x, tmin)
         ok = LLVM.and!(b, ok, LLVM.not!(b, LLVM.and!(b, isneg1, ismin)))
     end
-    emit_guard!(fc, ok, throw_divide_error)
+    emit_raise_unless!(fc, ok, DivideError())
     r = if name === :checked_sdiv_int
         LLVM.sdiv!(b, x, y)
     elseif name === :checked_udiv_int
@@ -400,13 +450,19 @@ end
 # %1, ...) or a `(module, entry)` pair. The IR is parsed into the module being emitted,
 # marked `alwaysinline`, and called.
 
-function llvmcall_type(fc::FnCtx, @nospecialize T)
+# the LLVM type of values of type `T` in an llvmcall: of `ccall(..., llvmcall, ...)`, or
+# with `base`, of `Base.llvmcall`
+function llvmcall_type(fc::FnCtx, @nospecialize(T); base::Bool=false)
     (T === Nothing || T === Cvoid) && return LLVM.VoidType()
+    # (the IR of `Base.llvmcall` gets `Ptr` values as integers of their size, as native
+    # code passes them)
+    base && T isa DataType && T <: Ptr && return iptr_type(fc)
     repr_kind(T) === Inline || unsupported("llvmcall with the type ", T)
     ty = value_type(fc, T)
-    # (llvmcall passes structs other than tuples as LLVM structs)
-    if ty isa LLVM.ArrayType && !(T <: Tuple)
-        return LLVM.StructType(fill(ty.element_type, Int(length(ty))))
+    # (`ccall` passes structs other than tuples as LLVM structs, `julia_struct_to_llvm`
+    # for llvmcall)
+    if !base && ty isa LLVM.ArrayType && !(T <: Tuple)
+        return LLVM.StructType(fill(ty.element_type, LLVM.array_length(ty)))
     end
     return ty
 end
@@ -424,8 +480,8 @@ function emit_llvmcall(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     vals = args[4:end]
     ATs = AT isa DataType ? collect(Any, AT.parameters) : Any[]
     length(ATs) == length(vals) || return nothing
-    lrt = llvmcall_type(fc, RT)
-    lats = LLVM.LLVMType[llvmcall_type(fc, T) for T in ATs]
+    lrt = llvmcall_type(fc, RT; base=true)
+    lats = LLVM.LLVMType[llvmcall_type(fc, T; base=true) for T in ATs]
     cgm = fc.cgm
     if ir isa String
         name = unique_name(cgm, "jl_llvmcall")
@@ -451,12 +507,21 @@ function emit_llvmcall(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     for (v, T, t) in zip(vals, ATs, lats)
         cv = convert_repr(fc, v, T)
         cv.kind === Inline || unsupported("an llvmcall argument of type ", T)
-        push!(ops, LLVM.value_type(cv.V) == t ? cv.V : reinterpret_value(fc, cv.V, t))
+        push!(ops, llvmcall_value(fc, cv.V, t))
     end
     r = LLVM.call!(fc.builder, LLVM.function_type(f), f, ops)
     lrt isa LLVM.VoidType && return ghost(Nothing, nothing)
-    rty = value_type(fc, RT)
-    return inline(RT, LLVM.value_type(r) == rty ? r : reinterpret_value(fc, r, rty))
+    return inline(RT, llvmcall_value(fc, r, value_type(fc, RT)))
+end
+
+# a value as the LLVM type `ty` of llvmcall: pointers and integers converted, other types
+# reinterpreted
+function llvmcall_value(fc::FnCtx, v::LLVM.Value, ty::LLVM.LLVMType)
+    from = LLVM.value_type(v)
+    from == ty && return v
+    from isa LLVM.PointerType && ty isa LLVM.IntegerType && return LLVM.ptrtoint!(fc.builder, v, ty)
+    from isa LLVM.IntegerType && ty isa LLVM.PointerType && return LLVM.inttoptr!(fc.builder, v, ty)
+    return reinterpret_value(fc, v, ty)
 end
 
 """

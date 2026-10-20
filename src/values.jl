@@ -8,7 +8,9 @@ A value in generated code: its Julia type `typ` (widened), its representation `k
 (see [`Repr`](@ref JuliaCodegen.Repr)), the LLVM value `V` (`nothing` for ghosts and
 `Bottom`), the value itself when it is known at compile time (`constant`), and for
 inline values that may also exist as a box (null at run time if not), that box (`vboxed`,
-native `Vboxed`), which boxing the value again reuses.
+native `Vboxed`), which boxing the value again reuses, and for inline values loaded from
+memory that never changes (a reference argument, a box), a pointer to it (`mem`), which
+calls pass by reference and dynamic indices index.
 
 Use the constructors [`ghost`](@ref JuliaCodegen.ghost), [`inline`](@ref
 JuliaCodegen.inline), [`boxed`](@ref JuliaCodegen.boxed), [`unboxed_union`](@ref
@@ -20,7 +22,11 @@ struct CGVal
     V::Union{Nothing,LLVM.Value}
     constant::Union{Nothing,Some{Any}}
     vboxed::Union{Nothing,LLVM.Value}
+    mem::Union{Nothing,LLVM.Value}
 end
+
+CGVal(@nospecialize(typ), kind::Repr, V, constant, vboxed) =
+    CGVal(typ, kind, V, constant, vboxed, nothing)
 
 "The ghost value `v` of type `T`."
 ghost(@nospecialize(T), @nospecialize(v)) = CGVal(T, Ghost, nothing, Some{Any}(v), nothing)
@@ -29,14 +35,14 @@ ghost(@nospecialize(T), @nospecialize(v)) = CGVal(T, Ghost, nothing, Some{Any}(v
 bottom() = CGVal(Union{}, Bottom, nothing, nothing, nothing)
 
 """
-    inline(T, V; constant, vboxed)
+    inline(T, V; constant, vboxed, mem)
 
 An inline value of type `T`, the LLVM value `V` of its layout.
 """
 function inline(@nospecialize(T), V::LLVM.Value; constant::Union{Nothing,Some}=nothing,
-                vboxed::Union{Nothing,LLVM.Value}=nothing)
+                vboxed::Union{Nothing,LLVM.Value}=nothing, mem::Union{Nothing,LLVM.Value}=nothing)
     return CGVal(T, Inline, V, constant === nothing ? nothing : Some{Any}(something(constant)),
-                 vboxed)
+                 vboxed, mem)
 end
 
 """

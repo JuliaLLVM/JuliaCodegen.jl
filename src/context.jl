@@ -5,8 +5,9 @@
 
 An LLVM function emitted for a `MethodInstance`, in JuliaCodegen's internal calling
 convention: ghost arguments are dropped, the others are passed in their representation
-(inline values by value, boxed ones as tracked pointers, unboxed unions as their union
-type), and the result is returned in the representation of the inferred return type
+(inline values by value, but aggregates without references by reference to memory that
+doesn't change, `ptr addrspace(11)`, as native code's specsig convention; boxed ones as
+tracked pointers, unboxed unions as their union type), and the result is returned in the representation of the inferred return type
 (`void` for ghosts and `Union{}`).
 """
 struct FuncInfo
@@ -61,6 +62,8 @@ mutable struct CGModule
     throwing_stubs::Bool
     "The debug information (a `DebugInfo`), created on first use."
     debuginfo::Any
+    "The linkage names of the subprograms of functions, if not the functions' names."
+    debug_linkage::IdDict{LLVM.Function,String}
     counter::Int
 end
 
@@ -71,7 +74,7 @@ function CGModule(mod::LLVM.Module, config::CodegenConfig; world::UInt=Base.get_
     return CGModule(mod, config, world, Layouts(config), TBAA(config.dialect),
                     IdDict{Core.MethodInstance,FuncInfo}(), Tuple{FuncInfo,Any}[],
                     IdDict{Any,LLVM.GlobalVariable}(), Pair{Core.MethodInstance,Any}[], Entry[], ir_source,
-                    throwing_stubs, nothing, 0)
+                    throwing_stubs, nothing, IdDict{LLVM.Function,String}(), 0)
 end
 
 "A name that is unique in the module, from `prefix` and the function `f` (if any)."

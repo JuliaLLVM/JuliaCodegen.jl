@@ -262,8 +262,22 @@ function runtime_symbol_name(sym::Symbol)
     isempty(hs) && return nothing
     iname = Symbol("i", sym)
     own_dlsym(hs[1], iname) != C_NULL && return String(iname)
-    any(h -> own_dlsym(h, sym) != C_NULL, hs) && return String(sym)
     return nothing
+end
+
+# the runtime's libraries as `jl_dlfind` names them (pointers that are not strings,
+# `JL_EXE_LIBNAME` etc.), with the globals of their handles
+const RUNTIME_LIBRARIES = Dict(1 => "jl_exe_handle", 2 => "jl_libjulia_handle",
+                               3 => "jl_libjulia_internal_handle")
+
+# the library that defines `sym` as native code finds it (`jl_dlfind`): `nothing` (any
+# library), a library name (on Windows, which has no global symbol namespace, the C
+# runtime, kernel32, ...), or one of the runtime's libraries (an `Int`, see above)
+function find_library(sym::Symbol)
+    found = ccall(:jl_dlfind, Ptr{UInt8}, (Cstring,), String(sym))
+    found == C_NULL && return nothing
+    haskey(RUNTIME_LIBRARIES, Int(UInt(found))) && return Int(UInt(found))
+    return unsafe_string(found)
 end
 
 # an external declaration: a function of type `ft`, or without `ft`, a global
@@ -276,8 +290,8 @@ function declare_symbol(cgm::CGModule, name::String, ft=nothing)
 end
 
 # a module-owned `ptr` global, initially null
-function symbol_cache!(cgm::CGModule, prefix::String)
-    gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), unique_name(cgm, prefix))
+function symbol_cache!(cgm::CGModule, prefix::String, suffix::String="")
+    gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), unique_name(cgm, prefix) * suffix)
     LLVM.initializer!(gv, LLVM.null(T_ptr()))
     LLVM.linkage!(gv, LLVM.API.LLVMInternalLinkage)
     return gv
@@ -307,16 +321,14 @@ function emit_symbol_address(fc::FnCtx, sym::Symbol, @nospecialize(lib); ft=noth
     if lib === nothing && libexpr === nothing
         rname = runtime_symbol_name(sym)
         rname === nothing || return declare_symbol(cgm, rname, ft)
-        # the library that defines it, as native code finds it (`jl_dlfind`): on Windows,
-        # which has no global symbol namespace, the C runtime, kernel32, ...
-        found = ccall(:jl_dlfind, Cstring, (Cstring,), String(sym))
-        found == C_NULL || (lib = unsafe_string(found))
+        lib = find_library(sym)
     end
     b = fc.builder
     P = T_ptr()
     W = config(fc).target.pointer_size
-    dynamic = libexpr !== nothing || !(lib === nothing || lib isa Union{String,Symbol})
-    cache = symbol_cache!(cgm, "ccall_" * String(sym))
+    dynamic = libexpr !== nothing || !(lib === nothing || lib isa Union{String,Symbol,Int})
+    # (named as native code's lazily bound functions, `jlplt_name_N_got`)
+    cache = symbol_cache!(cgm, "jlplt_" * String(sym), "_got")
     cached = LLVM.load!(b, P, cache; align=W, ordering=LLVM.API.LLVMAtomicOrderingUnordered)
     from = current_block(b)
     f = current_function(fc)
@@ -330,8 +342,15 @@ function emit_symbol_address(fc::FnCtx, sym::Symbol, @nospecialize(lib); ft=noth
         LLVM.call!(b, LLVM.function_type(lf), lf, LLVM.Value[libv, literal_pointer(fc, sym)])
     else
         lf = declare_runtime(cgm.mod, dialect(fc), :jl_load_and_lookup)
-        libname, hnd = lib === nothing ? (LLVM.null(P), declare_symbol(cgm, "jl_RTLD_DEFAULT_handle")) :
-                                         (cstring!(cgm, String(lib)), symbol_cache!(cgm, "ccalllib"))
+        libname, hnd = if lib === nothing
+            LLVM.null(P), declare_symbol(cgm, "jl_RTLD_DEFAULT_handle")
+        elseif lib isa Int
+            # one of the runtime's libraries, by `jl_dlfind`'s name and its handle's global
+            LLVM.const_inttoptr(LLVM.ConstantInt(iptr_type(fc), lib), P),
+            declare_symbol(cgm, RUNTIME_LIBRARIES[lib])
+        else
+            cstring!(cgm, String(lib)), symbol_cache!(cgm, "ccalllib")
+        end
         LLVM.call!(b, LLVM.function_type(lf), lf, LLVM.Value[libname, cstring!(cgm, String(sym)), hnd])
     end
     LLVM.store!(b, found, cache; align=W, ordering=LLVM.API.LLVMAtomicOrderingRelease)
@@ -564,10 +583,12 @@ end
 """
     JuliaCodegen.emit_llvmcall_cc(fc, ex, typ) -> CGVal
 
-`ccall("llvm.name", llvmcall, rt, argtypes, args...)`: a call of the LLVM function `name`
-(an intrinsic, also one that LLVM doesn't know, which back ends and validation report),
-declared with the LLVM types of `llvmcall` (tuples of `VecElement`s are vectors), as
-native code calls it.
+`ccall("llvm.name", llvmcall, rt, argtypes, args...)`: a call of the LLVM intrinsic `name`
+(the base name of an overloaded one is mangled from the call's signature), or with
+`"extern name"` of the external function `name`, declared with the LLVM types of
+`llvmcall` (tuples of `VecElement`s are vectors), as native code calls it. Any other name
+(also of an intrinsic LLVM doesn't know) is an error at run time ("llvmcall only supports
+intrinsic calls"), as in native code.
 """
 function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     b = fc.builder
@@ -576,26 +597,36 @@ function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     target isa Tuple && length(target) == 1 && (target = target[1])
     target isa Union{Symbol,String} || unsupported("an llvmcall of a name not known at compile time")
     fname = String(target)
-    # (native code compiles anything but an intrinsic to an error: "llvmcall only supports
-    # intrinsic calls")
-    startswith(fname, "llvm.") || unsupported("an llvmcall of the non-intrinsic ", fname)
     nargs = length(argtypes)
     (nreq == 0 || nreq == nargs) || unsupported("a variadic llvmcall")
-    # (native code mangles the base name of an overloaded intrinsic, e.g. `llvm.powi`, from
-    # the signature)
-    intr = tryparse(LLVM.Intrinsic, fname)
-    intr !== nothing && LLVM.isoverloaded(intr) && LLVM.name(intr) == fname &&
-        unsupported("an llvmcall of the unmangled overloaded intrinsic ", fname)
     mod = fc.cgm.mod
     lrt = llvmcall_type(fc, rt)
     lats = LLVM.LLVMType[llvmcall_type(fc, T) for T in argtypes]
     ft = LLVM.FunctionType(lrt, lats)
-    f = if haskey(LLVM.functions(mod), fname)
-        g = LLVM.functions(mod)[fname]
-        LLVM.function_type(g) == ft || unsupported("an llvmcall of ", fname, " with another signature")
-        g
+    f = if startswith(fname, "extern ")
+        # `extern name`: an external function of that name, e.g. of a GPU runtime
+        llvmcall_function(mod, chopprefix(fname, "extern "), ft)
+    elseif startswith(fname, "llvm.") && tryparse(LLVM.Intrinsic, fname) !== nothing
+        intr = tryparse(LLVM.Intrinsic, fname)
+        if LLVM.isoverloaded(intr) && LLVM.name(intr) == fname
+            # the base name of an overloaded intrinsic (`llvm.powi`): the overload of
+            # the call's signature (`llvm.powi.f64.i32`), as native code mangles it
+            try
+                LLVM.Function(mod, intr, ft)
+            catch err
+                err isa ArgumentError || rethrow()
+                unsupported("an llvmcall of ", fname, " with the signature ", string(ft))
+            end
+        else
+            llvmcall_function(mod, fname, ft)
+        end
     else
-        LLVM.Function(mod, fname, ft)
+        # anything but an intrinsic LLVM knows or an `extern` function is an error at run
+        # time, as native code compiles it (which GPU compilers report)
+        err = declare_runtime(mod, dialect(fc), :jl_error)
+        LLVM.call!(b, LLVM.function_type(err), err,
+                   LLVM.Value[cstring!(fc.cgm, "llvmcall only supports intrinsic calls")])
+        return emit_unreachable!(fc)
     end
     ops = LLVM.Value[]
     for (i, T) in enumerate(argtypes)
@@ -608,6 +639,14 @@ function emit_llvmcall_cc(fc::FnCtx, ex::Expr, @nospecialize(typ))
     lrt isa LLVM.VoidType && return ghost(Nothing, nothing)
     rty = value_type(fc, rt)
     return inline(rt, LLVM.value_type(r) == rty ? r : reinterpret_value(fc, r, rty))
+end
+
+# the function `name` of `mod` with the type `ft`, declared if there is none
+function llvmcall_function(mod::LLVM.Module, name::AbstractString, ft::LLVM.FunctionType)
+    haskey(LLVM.functions(mod), name) || return LLVM.Function(mod, String(name), ft)
+    f = LLVM.functions(mod)[name]
+    LLVM.function_type(f) == ft || unsupported("an llvmcall of ", name, " with another signature")
+    return f
 end
 
 # Runtime functions that native code emits inline (`emit_ccall`'s special functions):
@@ -682,6 +721,8 @@ function emit_expr_head!(fc::FnCtx, idx::Int, ex::Expr, @nospecialize(typ))
         return emit_foreigncall(fc, ex, typ)
     elseif head === :cfunction
         return emit_cfunction(fc, ex, typ)
+    elseif head === :invoke_modify
+        return emit_invoke_modify(fc, ex, typ)
     elseif head === :foreignglobal        # (Julia 1.14 and later)
         return emit_cglobal(fc, ex.args[1], typ)
     elseif head === :gc_preserve_begin

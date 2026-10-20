@@ -31,6 +31,10 @@ end
 
 derived(fc::FnCtx, v::LLVM.Value) = LLVM.addrspacecast!(fc.builder, v, T_derived())
 
+# a tracked pointer passed to a function that roots it (`mark_callee_rooted`)
+callee_rooted(fc::FnCtx, v::LLVM.Value) =
+    LLVM.addrspacecast!(fc.builder, v, LLVM.PointerType(AddrSpace.CalleeRooted))
+
 """
     JuliaCodegen.emit_allocation(fc, T) -> LLVM.Value
 
@@ -101,10 +105,12 @@ function convert_repr(fc::FnCtx, v::CGVal, @nospecialize T)
             v.typ === T && return v
             # the value is known to be of type T, so representations agree
             value_type(fc, v.typ) == value_type(fc, T) &&
-                return CGVal(T, Inline, v.V, v.constant, v.vboxed)
+                return CGVal(T, Inline, v.V, v.constant, v.vboxed, v.mem)
             unsupported("converting the inline ", v.typ, " to ", T)
         elseif v.kind === Boxed
-            return inline(T, emit_unbox(fc, v.V, T); constant=v.constant)
+            # (an immutable object: its contents never change)
+            mem = byref(fc.cgm, T) ? derived(fc, v.V) : nothing
+            return inline(T, emit_unbox(fc, v.V, T); constant=v.constant, mem)
         end
         unsupported("converting the ghost ", v.typ, " to the inline ", T)
     end

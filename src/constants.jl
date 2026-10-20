@@ -9,16 +9,68 @@
 # addresses of objects.
 
 """
-    JuliaCodegen.literal_global(cgm, x) -> LLVM.GlobalVariable
+    JuliaCodegen.literal_global(cgm, x) -> LLVM.Constant
 
-The global of `cgm` that holds the address of the object `x`.
+The global of `cgm` that holds the address of the object `x`, as native code's
+(`literal_pointer_val_slot`): for `true`, `false`, `nothing`, `()` and `Core.svec()`, the
+runtime's own (`jl_true`, ...); for types with a small tag, their entry in the runtime's
+`jl_small_typeof`; for other objects, a global of the module, named as native code's.
 """
 function literal_global(cgm::CGModule, @nospecialize x)
+    name = runtime_object_name(x)
+    name === nothing || return runtime_object_global(cgm, name)
+    st = smalltag(cgm.config, x)
+    if x isa DataType && st != 0
+        table = runtime_global(cgm.mod, :jl_small_typeof, LLVM.Int8Type())
+        return LLVM.const_inbounds_gep(LLVM.Int8Type(), table,
+                                       LLVM.Constant[LLVM.ConstantInt(LLVM.Int32Type(), st << 4)])
+    end
     get!(cgm.literals, x) do
-        gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), unique_name(cgm, "jl_global"))
+        gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), literal_name(cgm, x))
         LLVM.linkage!(gv, LLVM.API.LLVMExternalLinkage)
+        gv.metadata["julia.constgv"] = LLVM.MDNode(LLVM.Metadata[])
         gv
     end
+end
+
+# the name of the global of the object `x`, as native code's (`julia_pgv`): `+Mod.T#` for
+# types, `-Mod.f#` for methods and their instances, `jl_sym#s#` for symbols and
+# `jl_global#` for other objects, numbered
+function literal_name(cgm::CGModule, @nospecialize x)
+    qualified(mod, name) = join((fullname(mod)..., name), '.')
+    prefix = if x isa DataType
+        string("+", qualified(x.name.module, x.name.name), "#")
+    elseif x isa Method
+        string("-", qualified(x.module, x.name), "#")
+    elseif x isa Core.MethodInstance && x.def isa Method
+        string("-", qualified(x.def.module, x.def.name), "#")
+    elseif x isa Symbol
+        string("jl_sym#", x, "#")
+    else
+        "jl_global#"
+    end
+    cgm.counter += 1
+    return string(prefix, cgm.counter)
+end
+
+# The objects the runtime has globals of, which native code refers to by those
+# (`global_jlvalue_to_llvm` in codegen.cpp): GPU compilers relocate them by name.
+const RUNTIME_OBJECTS = (true => "jl_true", false => "jl_false", nothing => "jl_nothing",
+                         Core.svec() => "jl_emptysvec", () => "jl_emptytuple")
+
+function runtime_object_name(@nospecialize x)
+    for (obj, name) in RUNTIME_OBJECTS
+        x === obj && return name
+    end
+    return nothing
+end
+
+# the runtime's global `name`, which holds the address of its object
+function runtime_object_global(cgm::CGModule, name::String)
+    haskey(LLVM.globals(cgm.mod), name) && return LLVM.globals(cgm.mod)[name]
+    gv = LLVM.GlobalVariable(cgm.mod, T_ptr(), name)
+    LLVM.constant!(gv, true)
+    return gv
 end
 
 """
@@ -46,6 +98,16 @@ function literal_pointer(fc::FnCtx, @nospecialize x)
             LLVM.addrspacecast!(b, p, T_tracked())
         end
     end
+end
+
+# an untracked pointer to the object `x` (native code's `literal_pointer_val`), for the
+# runtime functions that take one, loaded where it is used
+function literal_pointer_raw(fc::FnCtx, @nospecialize x)
+    p = LLVM.load!(fc.builder, T_ptr(), literal_global(fc.cgm, x); align=config(fc).target.pointer_size)
+    tbaa!(fc, p, :const)
+    p.metadata[LLVM.MD_invariant_load] = LLVM.MDNode(LLVM.Metadata[])
+    p.metadata[LLVM.MD_nonnull] = LLVM.MDNode(LLVM.Metadata[])
+    return p
 end
 
 # where loads of objects go: the start of the entry block, which dominates every use

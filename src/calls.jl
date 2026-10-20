@@ -54,8 +54,26 @@ function emit_guard!(fc::FnCtx, cond::LLVM.Value, f::Function, args::CGVal...)
     return nothing
 end
 
+"""
+    JuliaCodegen.emit_raise_unless!(fc, cond, exc)
+
+If `cond` (an `i1`) is false, throw the exception object `exc` through the runtime
+(`jl_throw`), as native code's `raise_exception_unless`.
+"""
+function emit_raise_unless!(fc::FnCtx, cond::LLVM.Value, @nospecialize(exc))
+    b = fc.builder
+    fail = LLVM.BasicBlock(current_function(fc), "fail")
+    pass = LLVM.BasicBlock(current_function(fc), "pass")
+    LLVM.br!(b, cond, pass, fail)
+    LLVM.position!(b, LLVM.at_end(fail))
+    f = runtime_function(fc, :jl_throw)
+    LLVM.call!(b, LLVM.function_type(f), f, LLVM.Value[callee_rooted(fc, literal_pointer(fc, exc))])
+    LLVM.unreachable!(b)
+    LLVM.position!(b, LLVM.at_end(pass))
+    return nothing
+end
+
 # error paths, which construct the exceptions in Julia
-@noinline throw_divide_error() = throw(DivideError())
 @noinline throw_error_message(msg::String) = throw(ErrorException(msg))
 
 ## walker hooks
@@ -67,8 +85,15 @@ function emit_call!(fc::FnCtx, f::CGVal, ex::Expr, @nospecialize(typ))
     end
     args = CGVal[operand(fc, a) for a in ex.args[2:end]]
     # a call that inference found to throw (e.g. of an intrinsic with the wrong number of
-    # arguments) goes to the runtime, which throws the error
-    typ === Union{} && return emit_dynamic_call(fc, f, args, typ)
+    # arguments) goes to the runtime, which throws the error; but `throw` itself, which
+    # throws through `jl_throw` as native code (which GPU compilers lower)
+    if typ === Union{}
+        if isconstant(f) && constant_value(f) === Core.throw
+            r = emit_builtin(fc, Core.throw, args, typ)
+            r === nothing || return r
+        end
+        return emit_dynamic_call(fc, f, args, typ)
+    end
     if isconstant(f) && constant_value(f) isa Core.IntrinsicFunction
         r = emit_intrinsic(fc, constant_value(f), args, typ)
         r === nothing || return r
@@ -83,17 +108,24 @@ end
 invoke_target(@nospecialize(x)) =
     x isa Core.CodeInstance ? CC.get_ci_mi(x) : x::Core.MethodInstance
 
-function emit_invoke!(fc::FnCtx, ex::Expr, @nospecialize(typ))
-    mi = invoke_target(ex.args[1])
-    args = CGVal[operand(fc, a) for a in ex.args[2:end]]
+emit_invoke!(fc::FnCtx, ex::Expr, @nospecialize(typ)) =
+    emit_invoke_call(fc, invoke_target(ex.args[1]), CGVal[operand(fc, a) for a in ex.args[2:end]], typ)
+
+# the call `args` (the function first) of the method instance `mi`, a value of type `typ`
+function emit_invoke_call(fc::FnCtx, mi::Core.MethodInstance, args::Vector{CGVal}, @nospecialize(typ))
     # a call whose arguments may not match the signature (an invoke of a less specific
     # method with more specific arguments is fine; others are left to the runtime)
     sig = signature_argtypes(mi)
-    if !(mi.def isa Method) || mi.def.isva || any(T -> T isa Core.TypeofVararg, sig) ||
-       length(args) != length(sig) || !all(i -> args[i].typ <: sig[i], eachindex(args))
+    # (a varargs method instance whose signature has a `Vararg`, e.g. of an error path, is
+    # called through the runtime, with the arguments one by one; specialized ones are
+    # compiled)
+    if !(mi.def isa Method) || !args_match(sig, args) ||
+       (!isempty(sig) && last(sig) isa Core.TypeofVararg)
         return emit_dynamic_call(fc, args[1], args[2:end], typ; invoke=mi)
     end
     info = get_function!(fc.cgm, mi)
+    # (the varargs of a varargs method in the tuple its function takes)
+    mi.def.isva && (args = pack_varargs(fc, mi, args))
     r = emit_call_info(fc, info, args)
     r.kind === Bottom && return r
     return convert_repr(fc, r, typ)
