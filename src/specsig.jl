@@ -21,7 +21,8 @@
 
 A function signature in Julia's native specialized calling convention: how each argument
 is passed (`nothing` for ghosts, which aren't), how the result is returned (`:void`,
-`:value`, `:boxed` or `:sret`), whether the pgcstack is passed (`gcstack`, then in the
+`:value`, `:boxed`, `:sret`, or for unions, `:union`, the box or the type index and the
+data in a buffer, or `:ghosts`, the type index of a union of singletons), whether the pgcstack is passed (`gcstack`, then in the
 Swift calling convention), the LLVM function type and the return and parameter
 attributes.
 """
@@ -43,6 +44,20 @@ attr(name::String, n::Integer) = LLVM.EnumAttribute(name, n)
 ref_attributes(@nospecialize T) =
     LLVM.Attribute[nocapture(), attr("noundef"), attr("nonnull"),
                    attr("align", Base.datatype_alignment(T)), attr("dereferenceable", sizeof(T))]
+
+# The members of the union `U` that native code's union results return unboxed, in the
+# order of their type indices (from 1): those without references (`for_each_uniontype_small`)
+union_return_members(@nospecialize U) = Any[M for M in Base.uniontypes(U) if union_member_ok(M; bits=true)]
+
+# the size and alignment of the buffer of a union result of type `U`, and whether all its
+# members are returned unboxed (native `union_alloca_type`)
+function union_return_layout(@nospecialize U)
+    ms = union_return_members(U)
+    data = filter(M -> !is_singleton_type(M), ms)
+    nbytes = maximum(sizeof, data; init=0)
+    align = min(maximum(Base.datatype_alignment, data; init=0), 16)
+    return nbytes, align, length(ms) == length(Base.uniontypes(U)) && length(ms) < 128
+end
 
 # as native `deserves_sret`
 deserves_sret(cgm::CGModule, @nospecialize(T), ty::LLVM.LLVMType) =
@@ -77,7 +92,27 @@ function specsig_abi(cgm::CGModule, argtypes::Vector{Any}, @nospecialize(rettype
         ret, rty = :boxed, T_tracked()
         push!(retattrs, attr("nonnull"))
     elseif rk === UnionVal
-        unsupported("the specsig convention for a result of the union ", rettype)
+        # (from Julia 1.14 on, native code also returns members with references unboxed,
+        # with their roots, JuliaLang/julia#55045)
+        cgm.config.dialect.minor >= v"1.14" &&
+            any(M -> !union_member_ok(M; bits=true), union_members(rettype)) &&
+            unsupported("the specsig convention for a result of the union ", rettype,
+                        ", whose members have references")
+        nbytes, align, allunbox = union_return_layout(rettype)
+        if nbytes > 0
+            # `{box or null, type index}`, the data of an unboxed member in the buffer
+            # `union_bytes_return`
+            ret, rty = :union, LLVM.StructType([T_tracked(), LLVM.Int8Type()])
+            push!(params, T_ptr())
+            push!(paramattrs, LLVM.Attribute[attr("noalias"), nocapture(), attr("noundef"),
+                                              attr("nonnull"), attr("align", align),
+                                              attr("dereferenceable", nbytes)])
+        elseif allunbox
+            ret, rty = :ghosts, LLVM.Int8Type()
+        else
+            ret, rty = :boxed, T_tracked()
+            push!(retattrs, attr("nonnull"))
+        end
     else
         has_references(rettype) &&
             unsupported("the specsig convention for a result of ", rettype, ", which has references")
@@ -163,7 +198,7 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
         fc = FnCtx(cgm, info, nothing, b, top)
         debug_function!(fc, f)
         ps = LLVM.parameters(f)
-        p = sig.ret === :sret ? 2 : 1
+        p = sig.ret in (:sret, :union) ? 2 : 1
         if sig.gcstack
             fc.pgcstack = ps[p]
             p += 1
@@ -196,6 +231,15 @@ function emit_specsig_wrapper!(cgm::CGModule, info::FuncInfo, name::AbstractStri
             repr_kind(info.rettype) === Bottom ? LLVM.unreachable!(b) : LLVM.ret!(b)
         elseif repr_kind(info.rettype) === Ghost
             LLVM.ret!(b, emit_box(fc, ghost(info.rettype, something(ghost_value(info.rettype)))))
+        elseif repr_kind(info.rettype) === UnionVal
+            # (which may box the result)
+            if sig.gcstack
+                fc.current_task = current_task!(b, config(fc).runtime, fc.pgcstack)
+            else
+                emit_prologue!(fc; safepoint=false)
+            end
+            LLVM.ret!(b, union_return(fc, sig, unboxed_union(info.rettype, r),
+                                      sig.ret === :union ? ps[1] : nothing))
         else
             LLVM.ret!(b, r)
         end
@@ -218,6 +262,10 @@ function emit_specsig_call!(fc::FnCtx, sig::SpecSig, callee::LLVM.Value, args::V
     if sig.ret === :sret
         slot = entry_alloca!(fc, layout(fc, rt).llvm; align=Base.datatype_alignment(rt))
         push!(ops, slot)
+    elseif sig.ret === :union
+        nbytes, align, _ = union_return_layout(rt)
+        slot = entry_alloca!(fc, LLVM.ArrayType(LLVM.Int8Type(), nbytes); align)
+        push!(ops, slot)
     end
     sig.gcstack && push!(ops, fc.pgcstack)
     for (a, T, k) in zip(args, sig.argtypes, sig.args)
@@ -237,6 +285,56 @@ function emit_specsig_call!(fc::FnCtx, sig::SpecSig, callee::LLVM.Value, args::V
     k === Bottom && return emit_unreachable!(fc)
     k === Ghost && return ghost(rt, something(ghost_value(rt)))
     sig.ret === :boxed && return boxed(rt, r)
+    sig.ret in (:union, :ghosts) && return union_result(fc, sig, r, slot)
     sig.ret === :sret && return inline(rt, tbaa!(fc, LLVM.load!(b, layout(fc, rt).llvm, slot), :stack))
     return inline(rt, r)
+end
+
+# the union value `v` returned in the convention of `sig`, with the buffer `buf` of the
+# data of `:union`: of a member returned unboxed, its type index (and data), else its box
+# and `UNION_BOX_MARKER`
+function union_return(fc::FnCtx, sig::SpecSig, v::CGVal, buf)
+    b = fc.builder
+    U = v.typ
+    sig.ret === :boxed && return emit_box(fc, v)
+    ms = union_return_members(U)
+    # (the type indices of `v` and of the result agree when every member is returned
+    # unboxed)
+    sig.ret === :ghosts && return union_tindex_value(fc, v)
+    rty = LLVM.return_type(sig.ft)
+    pack(data, t) = LLVM.insert_value!(b, LLVM.insert_value!(b, LLVM.UndefValue(rty), data, 0), t, 1)
+    return union_switch(fc, v, rty; boxed=() -> pack(union_box_value(fc, v), i8(UNION_BOX_MARKER))) do M
+        k = findfirst(m -> m === M, ms)
+        k === nothing && return pack(emit_box(fc, union_member(fc, v, M)), i8(UNION_BOX_MARKER))
+        if !is_singleton_type(M)
+            st = LLVM.store!(b, union_member(fc, v, M).V, buf)
+            LLVM.alignment!(st, Base.datatype_alignment(M))
+        end
+        pack(LLVM.null(T_tracked()), i8(k))
+    end
+end
+
+# the union value of the result `r` of a call in the convention of `sig`, with the buffer
+# `buf` of the data of `:union` (the inverse of `union_return`)
+function union_result(fc::FnCtx, sig::SpecSig, r::LLVM.Value, buf)
+    b = fc.builder
+    U = sig.rettype
+    ms = union_return_members(U)
+    unboxed(t) = tindex_switch(fc, t, ms, union_type(U); name="union_result") do _, M
+        v = if is_singleton_type(M)
+            ghost(M, something(ghost_value(M)))
+        else
+            ld = LLVM.load!(b, value_type(fc, M), buf)
+            LLVM.alignment!(ld, Base.datatype_alignment(M))
+            inline(M, ld)
+        end
+        to_union(fc, v, U).V
+    end
+    sig.ret === :ghosts && return unboxed_union(U, unboxed(r))
+    data = LLVM.extract_value!(b, r, 0)
+    t = LLVM.extract_value!(b, r, 1)
+    isboxed = LLVM.icmp!(b, LLVM.API.LLVMIntNE, LLVM.and!(b, t, i8(UNION_BOX_MARKER)), i8(0))
+    v = emit_if(() -> unbox_union(fc, data, U).V, fc, isboxed, union_type(U);
+                name="union_result", otherwise=() -> unboxed(t))
+    return unboxed_union(U, v)
 end

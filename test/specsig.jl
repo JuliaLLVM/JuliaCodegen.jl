@@ -23,6 +23,10 @@ ss_throw(x) = throw(ArgumentError("ss_throw $x"))
 ss_vec(v::SS_V4) = map(x -> VecElement(x.value * 2f0), v)
 @noinline ss_vararg(xs...) = length(xs)
 ss_vararg2(a, xs...) = a + sum(xs)
+# unions: data and singletons unboxed, other members boxed
+ss_pick(c::Bool) = c ? 1 : "s"
+ss_pick_refs(c::Bool) = c ? 1.5 : (1, "a")
+ss_pick_boxed(c::Bool) = c ? nothing : "s"
 
 # The first function definition's header in native code for `f(::types...)`, without
 # names: the convention, the result and the parameters with their attributes.
@@ -122,6 +126,11 @@ const SS_CASES = [
     (ss_box, (Int,)), (ss_throw, (Int,)), (ss_vec, (SS_V4,)),
     # (varargs methods, with their arguments one by one)
     (ss_vararg2, (Int, Float64, Int8)),
+    # (union results)
+    (ss_id, (Union{Nothing,Int},)), (ss_id, (Union{Nothing,Missing},)), (ss_pick, (Bool,)),
+    (ss_pick_boxed, (Bool,)),
+    # (from Julia 1.14 on, native code returns members with references with their roots)
+    (VERSION < v"1.14-" ? [(ss_pick_refs, (Bool,))] : [])...,
 ]
 
 @testset "specsig" begin
@@ -146,10 +155,11 @@ const SS_CASES = [
 end
 
 @testset "unsupported" begin
-    # inline values with references are passed with their roots, unions returned with
-    # their payload separately
+    # inline values with references are passed with their roots, and from Julia 1.14 on,
+    # unions of them returned with their roots
     @test_throws JuliaCodegen.Unsupported specsig_header(ss_id, (SS_Ref,))
-    @test_throws JuliaCodegen.Unsupported specsig_header(ss_id, (Union{Nothing,Int},))
+    VERSION >= v"1.14-" &&
+        @test_throws JuliaCodegen.Unsupported specsig_header(ss_pick_refs, (Bool,))
     # (a signature that ends in `Vararg`: the jlcall convention)
     @dispose ctx=LLVM.Context() mod=LLVM.Module("x") begin
         cgm = JuliaCodegen.CGModule(mod, test_config())
@@ -180,7 +190,14 @@ end
         @cgtest run=run ss_box(10)
         @cgtest run=run ss_throw(11)
         @cgtest run=run ss_vec(map(VecElement, (1f0, 2f0, 3f0, 4f0)))
+        for c in (true, false)
+            @cgtest run=run ss_pick(c)
+            VERSION < v"1.14-" && @cgtest run=run ss_pick_refs(c)
+            @cgtest run=run ss_pick_boxed(c)
+        end
     end
+    @cgtest run=run_through_specsig ss_id(Union{Nothing,Int}[3][1])
+    @cgtest run=run_through_specsig ss_id(Union{Nothing,Missing}[missing][1])
     # (native code for these returns a constant, without code in the convention)
     @cgtest run=run_through_specsig ss_id(SS_Empty())
     @cgtest run=run_through_specsig ss_id(nothing)
