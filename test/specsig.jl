@@ -23,9 +23,12 @@ ss_throw(x) = throw(ArgumentError("ss_throw $x"))
 ss_vec(v::SS_V4) = map(x -> VecElement(x.value * 2f0), v)
 @noinline ss_vararg(xs...) = length(xs)
 ss_vararg2(a, xs...) = a + sum(xs)
-# unions: data and singletons unboxed, other members boxed
+# unions: data and singletons unboxed, other members boxed (before Julia 1.14, also
+# those with references)
 ss_pick(c::Bool) = c ? 1 : "s"
 ss_pick_refs(c::Bool) = c ? 1.5 : (1, "a")
+ss_pick_mid(c::Bool) = c ? Int8(1) : (Int8(2), "a", Int16(3))   # (a reference between data)
+ss_pick_ptrs(c::Bool) = c ? nothing : ("a", :b)                  # (only references)
 ss_pick_boxed(c::Bool) = c ? nothing : "s"
 ss_pick_const(c::Bool) = c ? 2.5 : nothing     # (the constant keeps its box)
 
@@ -129,9 +132,8 @@ const SS_CASES = [
     (ss_vararg2, (Int, Float64, Int8)),
     # (union results)
     (ss_id, (Union{Nothing,Int},)), (ss_id, (Union{Nothing,Missing},)), (ss_pick, (Bool,)),
-    (ss_pick_boxed, (Bool,)), (ss_pick_const, (Bool,)),
-    # (from Julia 1.14 on, native code returns members with references with their roots)
-    (VERSION < v"1.14-" ? [(ss_pick_refs, (Bool,))] : [])...,
+    (ss_pick_boxed, (Bool,)), (ss_pick_const, (Bool,)), (ss_pick_refs, (Bool,)),
+    (ss_pick_mid, (Bool,)), (ss_pick_ptrs, (Bool,)),
 ]
 
 @testset "specsig" begin
@@ -153,14 +155,21 @@ const SS_CASES = [
             ir
         end
     end
+    # from Julia 1.14 on, the references of a union member are returned in a roots
+    # argument, which GC lowering knows by its attribute
+    if test_config().dialect.gc_return_roots === :attribute
+        @test @filecheck begin
+            @check "define swiftcc { ptr addrspace(10), i8 } @ss_entry(ptr {{.*}}dereferenceable(16) %0, ptr {{.*}}dereferenceable(16) \"julia.return_roots\"=\"2\" %1,"
+            @check "store ptr addrspace(10) {{%.*}}, ptr {{%.*}}"
+            @check "store ptr addrspace(10) {{%.*}}, ptr {{%.*}}"
+            specsig_ir(ss_pick_ptrs, (Bool,))
+        end
+    end
 end
 
 @testset "unsupported" begin
-    # inline values with references are passed with their roots, and from Julia 1.14 on,
-    # unions of them returned with their roots
+    # inline values with references are passed with their roots
     @test_throws JuliaCodegen.Unsupported specsig_header(ss_id, (SS_Ref,))
-    VERSION >= v"1.14-" &&
-        @test_throws JuliaCodegen.Unsupported specsig_header(ss_pick_refs, (Bool,))
     # (a signature that ends in `Vararg`: the jlcall convention)
     @dispose ctx=LLVM.Context() mod=LLVM.Module("x") begin
         cgm = JuliaCodegen.CGModule(mod, test_config())
@@ -193,7 +202,9 @@ end
         @cgtest run=run ss_vec(map(VecElement, (1f0, 2f0, 3f0, 4f0)))
         for c in (true, false)
             @cgtest run=run ss_pick(c)
-            VERSION < v"1.14-" && @cgtest run=run ss_pick_refs(c)
+            @cgtest run=run ss_pick_refs(c)
+            @cgtest run=run ss_pick_mid(c)
+            @cgtest run=run ss_pick_ptrs(c)
             @cgtest run=run ss_pick_boxed(c)
             @cgtest run=run ss_pick_const(c)
         end
