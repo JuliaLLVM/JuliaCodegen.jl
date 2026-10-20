@@ -450,16 +450,19 @@ end
 # %1, ...) or a `(module, entry)` pair. The IR is parsed into the module being emitted,
 # marked `alwaysinline`, and called.
 
-function llvmcall_type(fc::FnCtx, @nospecialize(T); ptr_as_int::Bool=false)
+# the LLVM type of values of type `T` in an llvmcall: of `ccall(..., llvmcall, ...)`, or
+# with `base`, of `Base.llvmcall`
+function llvmcall_type(fc::FnCtx, @nospecialize(T); base::Bool=false)
     (T === Nothing || T === Cvoid) && return LLVM.VoidType()
     # (the IR of `Base.llvmcall` gets `Ptr` values as integers of their size, as native
     # code passes them)
-    ptr_as_int && T isa DataType && T <: Ptr && return iptr_type(fc)
+    base && T isa DataType && T <: Ptr && return iptr_type(fc)
     repr_kind(T) === Inline || unsupported("llvmcall with the type ", T)
     ty = value_type(fc, T)
-    # (llvmcall passes structs other than tuples as LLVM structs)
-    if ty isa LLVM.ArrayType && !(T <: Tuple)
-        return LLVM.StructType(fill(ty.element_type, Int(length(ty))))
+    # (`ccall` passes structs other than tuples as LLVM structs, `julia_struct_to_llvm`
+    # for llvmcall)
+    if !base && ty isa LLVM.ArrayType && !(T <: Tuple)
+        return LLVM.StructType(fill(ty.element_type, LLVM.array_length(ty)))
     end
     return ty
 end
@@ -477,8 +480,8 @@ function emit_llvmcall(fc::FnCtx, args::Vector{CGVal}, @nospecialize(rt))
     vals = args[4:end]
     ATs = AT isa DataType ? collect(Any, AT.parameters) : Any[]
     length(ATs) == length(vals) || return nothing
-    lrt = llvmcall_type(fc, RT; ptr_as_int=true)
-    lats = LLVM.LLVMType[llvmcall_type(fc, T; ptr_as_int=true) for T in ATs]
+    lrt = llvmcall_type(fc, RT; base=true)
+    lats = LLVM.LLVMType[llvmcall_type(fc, T; base=true) for T in ATs]
     cgm = fc.cgm
     if ir isa String
         name = unique_name(cgm, "jl_llvmcall")

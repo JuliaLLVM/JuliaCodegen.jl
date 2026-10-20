@@ -32,6 +32,13 @@ i_llvmcall_load(p::Ptr{Int32}) = Base.llvmcall("""
     %v = load i32, i32* %p, align 4
     ret i32 %v""", Int32, Tuple{Ptr{Int32}}, p)
 i_llvmcall_ptr(p::Ptr{Int32}) = Base.llvmcall("%q = add i64 %0, 4\nret i64 %q", Ptr{Int32}, Tuple{Ptr{Int32}}, p)
+# (a struct of fields of one type, which Base.llvmcall passes as an LLVM array)
+struct IPair; a::Int64; b::Int64; end
+i_llvmcall_struct(p::IPair) = Base.llvmcall("""
+    %a = extractvalue [2 x i64] %0, 0
+    %b = extractvalue [2 x i64] %0, 1
+    %s = add i64 %a, %b
+    ret i64 %s""", Int64, Tuple{IPair}, p)
 i_llvmcall_ptrs(v::Vector{Int32}) = GC.@preserve v (i_llvmcall_load(pointer(v)), i_llvmcall_ptr(pointer(v)) - pointer(v))
 i_poly(x) = 3x^2 - 2x + 1
 i_loop(n) = (s = 0; for i in 1:n; s += i; end; s)
@@ -123,6 +130,7 @@ end
         test_ir(i_fast, (Float32, Float32))
     end
     @cgtest i_llvmcall_ptrs(Int32[7, 8])
+    @cgtest i_llvmcall_struct(IPair(3, 4))
 end
 
 @testset "code" begin
