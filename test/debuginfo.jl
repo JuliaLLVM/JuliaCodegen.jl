@@ -54,6 +54,14 @@ end
                                             debug_info=kind)
         @test occursin("emissionKind: $name", d_ir(d_inner, (Int,); config))
     end
+    # without debug information, but with the locations
+    config = JuliaCodegen.CodegenConfig(; on_unsupported=:error, on_internal_error=:error,
+                                        debug_info=:no_debug)
+    @test @filecheck begin
+        @check "!dbg"
+        @check "emissionKind: NoDebug"
+        d_ir(d_inner, (Int,); config)
+    end
     @test_throws "invalid debug_info" JuliaCodegen.CodegenConfig(; debug_info=:lines)
 end
 

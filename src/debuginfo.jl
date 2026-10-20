@@ -1,11 +1,11 @@
-# Debug information: the line tables of native code (`debug_info_kind` above `NoDebug`):
+# Debug information: the line tables of native code (`debug_info_level` above 0):
 # a compile unit for the module, a subprogram for every function, and for every
 # statement the location of its line, with the functions inlined into it as inlined frames
 # (from the IR's line information). Tools (and GPUCompiler's error messages) read
 # backtraces from them. There is no information about variables or types.
 
 # the emission kinds of `debug_info` (`DICompileUnit::DebugEmissionKind`)
-const DEBUG_EMISSION_KINDS = (none=0, full=1, line_tables=2, directives=3)
+const DEBUG_EMISSION_KINDS = (no_debug=0, full=1, line_tables=2, directives=3)
 
 """
     JuliaCodegen.DebugInfo
