@@ -56,7 +56,7 @@ end
     # objects are referenced through globals, not by address
     ir = test_ir(w_constant_string, ())
     @test @filecheck begin
-        @check "@jl_global_{{[0-9]+}} = external global ptr"
+        @check "@\"jl_global#{{[0-9]+}}\" = external global ptr"
         @check_not "inttoptr (i64 {{[0-9]+}} to ptr)"
         print(ir)
     end
